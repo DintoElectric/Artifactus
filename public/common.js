@@ -16,9 +16,10 @@ export const initials = (name) => {
   return (w.length === 1 ? w[0].slice(0, 2) : w[0][0] + w[1][0]).toUpperCase();
 };
 
-export async function call(path, { method = "GET", body, pin } = {}) {
+export async function call(path, { method = "GET", body, pin, token } = {}) {
   const headers = {};
   if (pin) headers["x-pin"] = pin;
+  if (token) headers["x-player"] = token;
   let payload;
   if (body instanceof Blob) {
     headers["content-type"] = body.type || "application/octet-stream";

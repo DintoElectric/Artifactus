@@ -1,6 +1,7 @@
 import { call, uid, esc, clamp, TYPES, MapView } from "./common.js";
 import { mountRoller } from "./dice.js";
 import { SheetStore, mountBook, mountNotes, blankSheet } from "./sheet.js";
+import { Library, parseSpells } from "./library.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const saved = JSON.parse(localStorage.getItem("dmTable") || "null");
@@ -442,6 +443,7 @@ function returnItemsToStash(id) {
 function deleteToken(id) {
   const gone = ent(id);
   if (gone?.img) removeTokenImage(gone);
+  if (gone?.locked) call(`logins/${room}/${id}`, { method: "DELETE", pin }).catch(() => {});
   returnItemsToStash(id);
   state.ents = state.ents.filter((e) => e.id !== id);
   removeFromInit(id, false);
@@ -768,12 +770,13 @@ function renderParty() {
   for (const pc of pcs) {
     let o = sheets.get(pc.id);
     if (!o) {
-      const store = new SheetStore(room, pc.id, pin);
+      const store = new SheetStore(room, pc.id, { pin });
       const el = document.createElement("section");
       el.className = "pcard";
-      el.innerHTML = '<h2></h2><div class="book"></div><details class="notesbox"><summary>Player notes</summary><div class="nbody"></div></details>';
+      el.dataset.pid = pc.id;
+      el.innerHTML = '<div class="pchead"><h2></h2><span class="lock"></span><button class="btn small" data-act="login" type="button">Player login</button></div><div class="book"></div><details class="notesbox"><summary>Player notes</summary><div class="nbody"></div></details>';
       box.appendChild(el);
-      mountBook(el.querySelector(".book"), store, { canEdit: true });
+      mountBook(el.querySelector(".book"), store, { canEdit: true, library });
       mountNotes(el.querySelector(".nbody"), store, { canEdit: false });
       store.subscribe(() => {
         el.querySelector("summary").textContent = `Player notes (${store.view.notes.length})`;
@@ -783,6 +786,7 @@ function renderParty() {
       store.load();
     }
     o.el.querySelector("h2").textContent = pc.name;
+    o.el.querySelector(".lock").textContent = pc.locked ? "PIN set" : "Open to anyone";
   }
   let empty = box.querySelector(".empty");
   if (!pcs.length) {
@@ -798,6 +802,128 @@ async function pullSheets() {
     for (const [pid, o] of sheets) o.store.adopt(r.sheets[pid] || blankSheet());
   } catch { /* try again on the next tick */ }
 }
+
+/* ---------- player logins ---------- */
+const randomPin = () => String(100000 + (crypto.getRandomValues(new Uint32Array(1))[0] % 900000));
+
+$("#party").addEventListener("click", (e) => {
+  const b = e.target.closest('[data-act="login"]');
+  if (!b) return;
+  const pc = ent(b.closest(".pcard").dataset.pid);
+  if (pc) loginDialog(pc);
+});
+
+function loginDialog(pc) {
+  openDlg(`
+    <form>
+      <h2>${esc(pc.name)}: player login</h2>
+      <p class="hint" style="margin:0 0 .8rem">${pc.locked
+        ? "A PIN is set. Saving a new one signs out anyone who is logged in as this character."
+        : "No PIN is set, so anyone with the table code can play this character."}</p>
+      <div class="field"><label for="l_pin">PIN (4 to 12 characters)</label>
+        <div class="row"><input id="l_pin" name="pin" type="text" value="${randomPin()}" maxlength="12" autocomplete="off">
+        <button type="button" class="btn small" data-gen>New random PIN</button></div></div>
+      <div class="dlg-actions">
+        ${pc.locked ? '<button type="button" class="btn danger push" data-remove>Remove PIN</button>' : ""}
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button type="submit" class="btn primary">Save PIN</button>
+      </div>
+    </form>`,
+    async (d) => {
+      const newPin = String(d.pin || "").trim();
+      try {
+        await call(`logins/${room}/${pc.id}`, { method: "PUT", body: { pin: newPin }, pin });
+      } catch (err) { toast(err.message); return; }
+      pc.locked = true;
+      changed();
+      const link = `${location.origin}/play.html?room=${room}&c=${pc.id}`;
+      const note = `Join our game: ${link}\nCharacter: ${pc.name}\nPIN: ${newPin}`;
+      dlg.innerHTML = `
+        <form method="dialog">
+          <h2>${esc(pc.name)} is ready</h2>
+          <p class="hint" style="margin:0 0 .6rem">Share this with the player. The PIN can't be shown again later, but you can set a new one any time.</p>
+          <div class="field"><label>Invite link</label><input type="text" readonly value="${esc(link)}" onfocus="this.select()"></div>
+          <div class="field"><label>PIN</label><input type="text" readonly value="${esc(newPin)}" onfocus="this.select()"></div>
+          <div class="dlg-actions">
+            <button type="button" class="btn" data-copy>Copy invite and PIN</button>
+            <button type="submit" class="btn primary">Done</button>
+          </div>
+        </form>`;
+      dlg.querySelector("[data-copy]").onclick = async () => {
+        try { await navigator.clipboard.writeText(note); toast("Invite copied."); } catch { prompt("Copy this message:", note); }
+      };
+    },
+    (root) => {
+      root.querySelector("[data-gen]").onclick = () => { root.querySelector("#l_pin").value = randomPin(); };
+      root.querySelector("[data-remove]")?.addEventListener("click", async () => {
+        if (!confirm(`Remove the PIN for ${pc.name}? Anyone with the table code could play them.`)) return;
+        try { await call(`logins/${room}/${pc.id}`, { method: "DELETE", pin }); } catch (err) { toast(err.message); return; }
+        pc.locked = false;
+        dlg.close();
+        changed();
+      });
+    });
+}
+
+/* ---------- spell library ---------- */
+const library = new Library(room);
+const libInfo = () => {
+  $("#libInfo").textContent = library.loaded ? `${library.list.length} spell${library.list.length === 1 ? "" : "s"} in the library` : "";
+};
+library.subscribe(libInfo);
+
+$("#libBtn").onclick = () => {
+  let source = "";
+  openDlg(`
+    <form>
+      <h2>Spell library</h2>
+      <p class="hint" style="margin:0 0 .6rem">${library.list.length} spells now. Players search this list and add spells to their own sheets.</p>
+      <p class="hint" style="margin:0 0 .8rem">Import a CSV, TSV or JSON file, or paste a list. Columns it understands: name, level, school, casting time, range, components, duration, classes, description. With no header row, one spell per line works too, like "Fireball, 3".</p>
+      <div class="field"><label for="lib_file">File</label><input id="lib_file" type="file" accept=".csv,.tsv,.txt,.json"></div>
+      <div class="field"><label for="lib_text">Or paste here</label><textarea id="lib_text" rows="5"></textarea></div>
+      <p class="msg" id="lib_found" role="status"></p>
+      <label class="check field"><input type="checkbox" name="replace"> Replace the spells I imported before</label>
+      <div class="dlg-actions">
+        <button type="button" class="btn danger push" data-clear>Clear imported spells</button>
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button type="submit" class="btn primary">Import</button>
+      </div>
+    </form>`,
+    async (d) => {
+      let found;
+      try { found = parseSpells(source); } catch { toast("Could not read that. Check the file format."); return; }
+      if (!found.length) { toast("No spells found to import."); return; }
+      const merged = new Map();
+      if (d.replace !== "on") library.list.forEach((p) => merged.set(p.name.toLowerCase(), p));
+      found.forEach((p) => merged.set(p.name.toLowerCase(), p));
+      try {
+        const n = await library.save([...merged.values()], pin);
+        dlg.close();
+        toast(`Library saved: ${n} spells.`);
+      } catch (err) { toast("Could not save the library: " + err.message); }
+    },
+    (root) => {
+      const found = root.querySelector("#lib_found");
+      const check = () => {
+        try {
+          const list = parseSpells(source);
+          found.textContent = list.length ? `Found ${list.length} spells, starting with ${list.slice(0, 3).map((p) => `${p.name} (${p.level === 0 ? "cantrip" : "level " + p.level})`).join(", ")}.` : "";
+        } catch { found.textContent = "That doesn't look like a spell list I can read."; }
+      };
+      root.querySelector("#lib_file").addEventListener("change", async (e) => {
+        const f = e.target.files[0];
+        if (!f) return;
+        source = await f.text();
+        root.querySelector("#lib_text").value = source.length < 150000 ? source : "";
+        check();
+      });
+      root.querySelector("#lib_text").addEventListener("input", (e) => { source = e.target.value; check(); });
+      root.querySelector("[data-clear]").addEventListener("click", async () => {
+        if (!confirm("Remove every spell you imported for this table?")) return;
+        try { await library.save([], pin); dlg.close(); toast("Imported spells cleared."); } catch (err) { toast(err.message); }
+      });
+    });
+};
 
 /* ---------- objectives ---------- */
 const STATUS_LABEL = { active: "Active", done: "Completed", failed: "Failed" };
@@ -976,6 +1102,7 @@ $("#leave").onclick = () => {
     state.inv.stash ||= []; state.inv.dm ||= [];
     renderMap();
     renderSide();
+    library.load();
     mountRoller($("#dice"), {
       onRoll(r) {
         if (shareDm) call(`roll/${room}`, { method: "POST", body: { dm: true, ...r }, pin }).catch(() => {});

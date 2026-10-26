@@ -13,13 +13,13 @@
 <body>
 <div class="pview">
   <header class="ptop">
-    <div><span class="code" id="pcode"></span><span class="conn" id="conn" title="Connection"></span></div>
+    <div class="who"><span class="code" id="pcode"></span><span class="conn" id="conn" title="Connection"></span>
+      <button class="btn small" id="whoBtn" type="button">Log in</button></div>
     <div class="banner" id="banner" role="status"></div>
   </header>
   <div id="map"></div>
   <section class="sheet" id="sheet" hidden aria-live="polite">
     <div class="sheet-head"><h2 id="sheetTitle"></h2><button class="btn small" id="sheetClose" type="button">Close</button></div>
-    <div id="meBar" hidden></div>
     <div id="sheetBody"></div>
     <div id="spellBody" hidden></div>
     <div id="noteBody" hidden></div>
@@ -41,6 +41,7 @@
     <button class="btn" id="fitBtn" type="button">Fit map</button>
   </nav>
 </div>
+<dialog id="loginDlg"></dialog>
 <script type="module" src="play.js"></script>
 </body>
 </html>

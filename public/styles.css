@@ -296,3 +296,25 @@ dialog h2{margin-bottom:1rem}
 .notesbox{margin-top:.9rem}
 .notesbox summary{cursor:pointer;color:var(--mute);padding:.3rem 0}
 .notesbox .note{margin-top:.4rem}
+
+/* ---------- logins ---------- */
+.ptop .who{display:flex;align-items:center;gap:.4rem}
+.ptop .who .btn{max-width:11rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chars{display:grid;gap:.4rem;margin:0 0 .8rem}
+.charbtn{width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;font-weight:700}
+.charbtn small{color:var(--mute);font-weight:400}
+.pchead{display:flex;align-items:center;gap:.6rem;margin-bottom:.5rem}
+.pchead h2{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.pchead .lock{color:var(--mute);font-size:.88rem}
+
+/* ---------- spell library picker + details ---------- */
+.spell{display:block!important;padding:.35rem 0}
+.spell .srow{display:flex;align-items:center;gap:.5rem}
+.sdetail{margin:.4rem 0 .2rem 1.7rem;padding:.5rem .6rem;background:#1a2030;border-radius:8px;font-size:.93rem}
+.sdetail p{margin:.15rem 0;white-space:pre-wrap}
+.sdetail .smeta{color:var(--mute)}
+.picker{margin:.4rem 0;padding:.5rem;background:#1a2030;border-radius:10px}
+.picker .row>*{flex:1 1 0;min-width:0}
+.plist{max-height:46dvh;overflow:auto;margin-top:.4rem}
+.plist li{display:flex;align-items:center;gap:.5rem;padding:.35rem 0;border-bottom:1px solid var(--line)}
+.plist .sinfo{flex:1;min-width:0;display:grid}

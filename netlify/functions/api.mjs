@@ -18,6 +18,13 @@
 //   GET    /api/sheet/CODE/PID    a player's notes, spell slots and spells
 //   PUT    /api/sheet/CODE/PID    save them (compare-and-set on rev) { rev, sheet }
 //   GET    /api/sheets/CODE       DM reads every player's sheet  header x-pin
+//   POST   /api/playerlogin/CODE  player logs into a character   { pid, pin } -> { token }
+//   GET    /api/logins/CODE       DM: which characters have a PIN  header x-pin
+//   PUT    /api/logins/CODE/PID   DM sets a character's PIN      { pin }
+//   DELETE /api/logins/CODE/PID   DM removes it
+//   GET    /api/library/CODE      the table's spell library
+//   PUT    /api/library/CODE      DM replaces the spell library  { spells }
+// Player requests for a locked character carry the header x-player (the login token).
 import { getStore } from "@netlify/blobs";
 
 const reply = (data, status = 200) =>
@@ -102,6 +109,27 @@ function decodeRoll(key, room) {
 const readFeed = (keys, room, limit) =>
   keys.slice(-limit).reverse().map((k) => decodeRoll(k, room)).filter(Boolean);
 
+/* Player logins: the DM gives a character a PIN. Only a salted hash is stored. The login token is
+   derived from that hash, so changing the PIN signs the old devices out. */
+const loginKey = (room, pid) => `login/${room}/${pid}`;
+const pinHash = (room, pid, pin) => hash(`${room}|${pid}|${pin}`);
+const tokenOf = (login) => hash(`tok|${login.pinHash}`);
+const WINDOW = 10 * 60 * 1000;
+
+/* Spell library */
+const cleanLib = (list) =>
+  (Array.isArray(list) ? list : []).slice(0, 1500).map((p) => ({
+    name: str(p?.name, 80).trim(),
+    level: int(p?.level, 0, 9),
+    school: str(p?.school, 30),
+    time: str(p?.time, 40),
+    range: str(p?.range, 40),
+    comp: str(p?.comp, 60),
+    dur: str(p?.dur, 40),
+    classes: str(p?.classes, 60),
+    desc: str(p?.desc, 1500),
+  })).filter((p) => p.name);
+
 /* Player sheets: notes, spell slots and known spells. One blob per character, saved with a
    revision check so the DM and the player can both edit without overwriting each other. */
 const blankSheet = () => ({ rev: 0, notes: [], slots: {}, spells: [] });
@@ -160,6 +188,15 @@ export default async (req) => {
     if (!meta) return fail(404, "No table with that code.");
     const isDm = async (pin) => !!pin && (await hash(pin)) === meta.pinHash;
     const dmOnly = async () => ((await isDm(req.headers.get("x-pin"))) ? null : fail(401, "Wrong PIN."));
+    // Is this request allowed to act as the character? Open characters (no PIN set) always are.
+    const mayActAs = async (pid) => {
+      const login = await store.get(loginKey(room, pid), { type: "json" });
+      if (!login) return true;
+      if (await isDm(req.headers.get("x-pin"))) return true;
+      const tok = req.headers.get("x-player");
+      return !!tok && tok === (await tokenOf(login));
+    };
+    const needLogin = () => fail(401, "Log in as this character first.");
 
     if (route === "login" && req.method === "POST") {
       const { pin } = await req.json().catch(() => ({}));
@@ -231,6 +268,7 @@ export default async (req) => {
       const state = await store.get(`state/${room}`, { type: "json" });
       const e = state?.ents?.find((x) => x.id === id);
       if (!e || e.type !== "pc" || e.hidden) return fail(400, "Pick one of the player characters.");
+      if (!(await mayActAs(e.id))) return needLogin();
       await store.setJSON(`sub/${room}/${cleanId(id)}`, { id, init: Math.round(n), t: Date.now() });
       return reply({ ok: true });
     }
@@ -245,7 +283,7 @@ export default async (req) => {
       } else if (b.pid) {
         const state = await store.get(`state/${room}`, { type: "json" });
         const e = state?.ents?.find((x) => x.id === b.pid && x.type === "pc");
-        if (e) who = e.name;
+        if (e && (await mayActAs(e.id))) who = e.name;
       }
       const total = Math.round(Number(b.total));
       if (!Number.isFinite(total) || Math.abs(total) > 100000) return fail(400, "Bad roll.");
@@ -279,6 +317,7 @@ export default async (req) => {
     if (route === "sheet" && (req.method === "GET" || req.method === "PUT")) {
       const pid = cleanId(rawId);
       if (!pid) return fail(400, "Missing character id.");
+      if (!(await mayActAs(pid))) return needLogin();
       const key = `sheet/${room}/${pid}`;
       const cur = (await store.get(key, { type: "json" })) || blankSheet();
       if (req.method === "GET") return reply({ sheet: cur });
@@ -302,6 +341,67 @@ export default async (req) => {
       const sheets = {};
       await Promise.all(blobs.map(async (b) => { sheets[b.key.slice(prefix.length)] = await store.get(b.key, { type: "json" }); }));
       return reply({ sheets });
+    }
+
+    if (route === "playerlogin" && req.method === "POST") {
+      const { pid, pin } = await req.json().catch(() => ({}));
+      const id = cleanId(pid);
+      const state = await store.get(`state/${room}`, { type: "json" });
+      const e = state?.ents?.find((x) => x.id === id && x.type === "pc");
+      if (!e) return fail(400, "Pick one of the player characters.");
+      const key = loginKey(room, id);
+      const login = await store.get(key, { type: "json" });
+      if (!login) return reply({ pid: id, name: e.name, token: null });
+      const now = Date.now();
+      const f = login.fails || { n: 0, t: 0 };
+      const recent = now - f.t < WINDOW;
+      if (recent && f.n >= 8) return fail(429, "Too many wrong PINs. Wait a few minutes, or ask your DM.");
+      if ((await pinHash(room, id, String(pin ?? ""))) !== login.pinHash) {
+        login.fails = { n: (recent ? f.n : 0) + 1, t: now };
+        await store.setJSON(key, login);
+        return fail(401, "Wrong PIN.");
+      }
+      if (f.n) { login.fails = { n: 0, t: 0 }; await store.setJSON(key, login); }
+      return reply({ pid: id, name: e.name, token: await tokenOf(login) });
+    }
+
+    if (route === "logins") {
+      const denied = await dmOnly();
+      if (denied) return denied;
+      const prefix = `login/${room}/`;
+      if (req.method === "GET") {
+        const { blobs } = await store.list({ prefix });
+        const logins = {};
+        blobs.forEach((b) => { logins[b.key.slice(prefix.length)] = true; });
+        return reply({ logins });
+      }
+      const id = cleanId(rawId);
+      if (!id) return fail(400, "Missing character id.");
+      if (req.method === "DELETE") { await store.delete(loginKey(room, id)); return reply({ ok: true }); }
+      if (req.method === "PUT") {
+        const { pin } = await req.json().catch(() => ({}));
+        if (typeof pin !== "string" || pin.length < 4 || pin.length > 12) return fail(400, "Use a PIN of 4 to 12 characters.");
+        const state = await store.get(`state/${room}`, { type: "json" });
+        if (!state?.ents?.some((x) => x.id === id && x.type === "pc")) return fail(400, "Pick one of the player characters.");
+        await store.setJSON(loginKey(room, id), { pinHash: await pinHash(room, id, pin), fails: { n: 0, t: 0 }, set: Date.now() });
+        return reply({ ok: true });
+      }
+    }
+
+    if (route === "library" && req.method === "GET") {
+      const lib = await store.get(`lib/${room}`, { type: "json" });
+      return reply({ spells: lib?.spells || [] });
+    }
+    if (route === "library" && req.method === "PUT") {
+      const denied = await dmOnly();
+      if (denied) return denied;
+      const text = await req.text();
+      if (text.length > 2600000) return fail(413, "That spell list is too large. Try splitting it up.");
+      let body;
+      try { body = JSON.parse(text); } catch { return fail(400, "Bad data."); }
+      const spells = cleanLib(body.spells);
+      await store.setJSON(`lib/${room}`, { spells });
+      return reply({ ok: true, count: spells.length });
     }
 
     if (route === "subs" && req.method === "GET") {

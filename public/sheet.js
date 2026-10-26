@@ -8,16 +8,17 @@ const clone = (o) => JSON.parse(JSON.stringify(o));
 export const blankSheet = () => ({ rev: 0, notes: [], slots: {}, spells: [] });
 
 export class SheetStore {
-  constructor(room, pid, pin) {
+  constructor(room, pid, auth = {}) {
     this.room = room;
     this.pid = pid;
-    this.pin = pin;
+    this.auth = auth;        // { pin } for the DM, { token } for a logged-in player
+    this.dead = false;       // set when the server says the login is no longer valid
     this.base = blankSheet();
     this.view = blankSheet();
     this.ops = [];
     this.saving = false;
     this.timer = null;
-    this.status = "saved";   // saved | saving | error
+    this.status = "saved";   // saved | saving | error | auth
     this.loaded = false;
     this.subs = new Set();
   }
@@ -44,10 +45,11 @@ export class SheetStore {
 
   async load() {
     try {
-      const r = await call(`sheet/${this.room}/${this.pid}`);
+      const r = await call(`sheet/${this.room}/${this.pid}`, this.auth);
       if (!this.adopt(r.sheet) && !this.loaded) { this.loaded = true; this.emit(); }
-    } catch {
-      if (!this.loaded) { this.status = "error"; this.emit(); }
+    } catch (e) {
+      if (e.status === 401) { this.dead = true; this.status = "auth"; this.emit(); }
+      else if (!this.loaded) { this.status = "error"; this.emit(); }
     }
   }
 
@@ -75,32 +77,66 @@ export class SheetStore {
     try {
       const next = clone(this.base);
       batch.forEach((o) => o.fn(next));
-      const r = await call(`sheet/${this.room}/${this.pid}`, { method: "PUT", body: { rev: this.base.rev, sheet: next } });
+      const r = await call(`sheet/${this.room}/${this.pid}`, { method: "PUT", body: { rev: this.base.rev, sheet: next }, ...this.auth });
       this.base = r.sheet;
       this.ops.splice(0, batch.length);
       this.status = this.ops.length ? "saving" : "saved";
     } catch (e) {
       batch.forEach((o) => (o.sent = false));
       if (e.status === 409 && e.data?.current) { this.base = e.data.current; retryIn = 50; }
+      else if (e.status === 401) { this.dead = true; this.status = "auth"; }
       else { this.status = "error"; retryIn = 3000; }
     } finally {
       this.saving = false;
       this.recompute();
       this.emit();
-      if (this.ops.length) this.schedule(retryIn);
+      if (this.ops.length && !this.dead) this.schedule(retryIn);
     }
   }
 }
 
 const ORD = ["Cantrips", "1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th"];
-const STATUS = { saved: "Saved", saving: "Saving…", error: "Offline, retrying…" };
+const STATUS = { saved: "Saved", saving: "Saving…", error: "Offline, retrying…", auth: "Log in again" };
 const TYPING = "input[type=text],input[type=number],textarea,select";
 const typingIn = (root) => root.contains(document.activeElement) && document.activeElement.matches(TYPING);
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
 
 /* ---------- spell slots + known spells ---------- */
-export function mountBook(root, store, { canEdit = true } = {}) {
-  let editSlots = false, editing = null, adding = false, msg = "", msgTimer = null;
+export function mountBook(root, store, { canEdit = true, library = null } = {}) {
+  let editSlots = false, editing = null, adding = false, picking = false, msg = "", msgTimer = null;
+  let pq = "", plv = "";
+  const open = new Set();
+  const known = (name) => store.view.spells.some((p) => p.name.toLowerCase() === name.toLowerCase());
+  const brief = (e) => [e.school, e.time, e.range].filter(Boolean).join(" · ").slice(0, 160);
+
+  const pickList = () => {
+    const found = library.search(pq, plv);
+    if (!found.length) return '<li class="empty" style="display:block">No matches.</li>';
+    return found.map((e) => `<li>
+      <span class="sinfo"><b>${esc(e.name)}</b><small>${e.level === 0 ? "Cantrip" : "Level " + e.level}${e.school ? " · " + esc(e.school) : ""}${e.classes ? " · " + esc(e.classes) : ""}</small></span>
+      <button class="btn small" data-act="libadd" data-name="${esc(e.name)}" ${known(e.name) ? "disabled" : ""}>${known(e.name) ? "Added" : "Add"}</button></li>`).join("");
+  };
+
+  const picker = () => {
+    if (!picking || !library) return "";
+    if (!library.loaded) return '<div class="picker"><p class="empty">Loading spells…</p></div>';
+    if (!library.list.length) return '<div class="picker"><p class="empty">No spell library yet. Ask your DM to import one.</p></div>';
+    return `<div class="picker">
+      <div class="row">
+        <input type="text" data-f="q" placeholder="Search ${library.list.length} spells" value="${esc(pq)}" aria-label="Search spells" autocomplete="off">
+        <select data-f="lv" aria-label="Filter by level"><option value="">All levels</option>${ORD.map((_, i) =>
+          `<option value="${i}" ${String(i) === plv ? "selected" : ""}>${i === 0 ? "Cantrips" : "Level " + i}</option>`).join("")}</select>
+      </div>
+      <ul class="plist" data-plist>${pickList()}</ul>
+    </div>`;
+  };
+
+  const details = (p) => {
+    const e = library?.find(p.name);
+    if (!e || !open.has(p.id)) return "";
+    const meta = [e.school, e.time, e.range, e.comp, e.dur].filter(Boolean).map(esc).join(" · ");
+    return `<div class="sdetail">${meta ? `<p class="smeta">${meta}</p>` : ""}${e.desc ? `<p>${esc(e.desc)}</p>` : ""}${!meta && !e.desc ? "<p>No details in the library.</p>" : ""}</div>`;
+  };
 
   const levelOptions = (sel) =>
     ORD.map((l, i) => `<option value="${i}" ${i === sel ? "selected" : ""}>${i === 0 ? "Cantrip" : "Level " + i}</option>`).join("");
@@ -144,9 +180,13 @@ export function mountBook(root, store, { canEdit = true } = {}) {
       return `<h4 class="splevel">${lv === 0 ? "Cantrips" : ORD[lv] + " level"}</h4><ul class="spells">${list.map((p) => {
         if (editing === p.id && canEdit) return `<li>${spellForm(p)}</li>`;
         return `<li class="spell" data-id="${p.id}">
-          <input type="checkbox" data-act="prep" ${p.prepared ? "checked" : ""} ${canEdit ? "" : "disabled"} aria-label="${esc(p.name)} prepared">
-          <span class="sinfo"><button class="sname" data-act="edit" ${canEdit ? "" : "disabled"}>${esc(p.name)}</button>${p.note ? `<small>${esc(p.note)}</small>` : ""}</span>
-          ${canEdit && lv > 0 ? '<button class="btn small" data-act="cast">Cast</button>' : ""}
+          <div class="srow">
+            <input type="checkbox" data-act="prep" ${p.prepared ? "checked" : ""} ${canEdit ? "" : "disabled"} aria-label="${esc(p.name)} prepared">
+            <span class="sinfo"><button class="sname" data-act="edit" ${canEdit ? "" : "disabled"}>${esc(p.name)}</button>${p.note ? `<small>${esc(p.note)}</small>` : ""}</span>
+            ${library?.find(p.name) ? `<button class="btn small ghost" data-act="info" aria-expanded="${open.has(p.id)}">Info</button>` : ""}
+            ${canEdit && lv > 0 ? '<button class="btn small" data-act="cast">Cast</button>' : ""}
+          </div>
+          ${details(p)}
         </li>`;
       }).join("")}</ul>`;
     }).join("");
@@ -163,7 +203,10 @@ export function mountBook(root, store, { canEdit = true } = {}) {
       ${slotRows || '<p class="empty">No spell slots yet. Use Edit slots to set them.</p>'}
       <p class="msg" role="status">${esc(msg)}</p>
       <div class="bookhead" style="margin-top:.8rem"><h3>Known spells</h3>
-        ${canEdit ? `<button class="btn small" data-act="addspell" aria-pressed="${adding}">${adding ? "Close" : "Add spell"}</button>` : ""}</div>
+        ${canEdit ? `<span class="btnrow" style="margin:0">
+          ${library ? `<button class="btn small" data-act="pick" aria-pressed="${picking}">${picking ? "Close library" : "From library"}</button>` : ""}
+          <button class="btn small" data-act="addspell" aria-pressed="${adding}">${adding ? "Close" : "Add manually"}</button></span>` : ""}</div>
+      ${picking && canEdit ? picker() : ""}
       ${adding && canEdit ? spellForm(null) : ""}
       ${groups || '<p class="empty">No spells yet.</p>'}`;
   }
@@ -180,10 +223,27 @@ export function mountBook(root, store, { canEdit = true } = {}) {
     if (typingIn(root) && s) s.textContent = STATUS[store.status];
     else render();
   });
+  library?.subscribe(() => render());
+
+  root.addEventListener("input", (e) => {
+    const f = e.target.dataset.f;
+    if (!f || !library) return;
+    if (f === "q") pq = e.target.value;
+    if (f === "lv") plv = e.target.value;
+    const list = root.querySelector("[data-plist]");
+    if (list) list.innerHTML = pickList();
+  });
 
   root.addEventListener("click", (e) => {
     const b = e.target.closest("[data-act]");
-    if (!b || !canEdit) return;
+    if (!b) return;
+    if (b.dataset.act === "info") {
+      const id = b.closest("[data-id]").dataset.id;
+      open.has(id) ? open.delete(id) : open.add(id);
+      render(true);
+      return;
+    }
+    if (!canEdit) return;
     const act = b.dataset.act;
     const li = b.closest("[data-id]");
     const l = Number(b.dataset.l);
@@ -205,8 +265,17 @@ export function mountBook(root, store, { canEdit = true } = {}) {
       editSlots = !editSlots;
       render(true);
     } else if (act === "addspell") {
-      adding = !adding; editing = null;
+      adding = !adding; editing = null; picking = false;
       render(true);
+    } else if (act === "pick") {
+      picking = !picking; adding = false; editing = null;
+      if (picking) library?.load();
+      render(true);
+    } else if (act === "libadd") {
+      const entry = library?.find(b.dataset.name);
+      if (!entry || known(entry.name)) return;
+      store.mutate((d) => { d.spells.push({ id: uid(), name: entry.name, level: entry.level, note: brief(entry), prepared: false }); });
+      flash(`Added ${entry.name}.`);
     } else if (act === "cancel") {
       adding = false; editing = null;
       render(true);
