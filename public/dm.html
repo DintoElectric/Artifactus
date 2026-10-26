@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#161b25">
+<title>DM Table</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Alegreya:ital,wght@0,500;0,700;1,500&family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <span class="code" id="code" title="Table code"></span>
+    <button class="btn small" id="copyLink" type="button">Copy player link</button>
+    <nav class="tabs" role="tablist" aria-label="Views">
+      <button role="tab" id="tabMap" aria-selected="true">Map</button>
+      <button role="tab" id="tabInv" aria-selected="false">Inventory</button>
+    </nav>
+    <span class="grow"></span>
+    <label class="check"><input type="checkbox" id="mapOn"> Map visible to players</label>
+    <span class="sync" id="sync" role="status">Saved</span>
+    <button class="btn small ghost" id="leave" type="button">Leave</button>
+  </header>
+
+  <main class="main">
+    <section class="pane" id="paneMap">
+      <div class="maptools">
+        <button class="btn small" id="upload" type="button">Upload map</button>
+        <button class="btn small" id="fit" type="button">Fit to screen</button>
+        <label class="check"><input type="checkbox" id="gridOn"> Grid</label>
+        <label class="check"><input type="checkbox" id="snapOn"> Snap tokens</label>
+        <span class="rng"><label for="gridSize">Square size</label><input type="range" id="gridSize" min="16" max="300" value="60"></span>
+      </div>
+      <div class="maptools fogbar">
+        <label class="check"><input type="checkbox" id="fogOn"> Fog of war</label>
+        <span id="fogCtl" class="row" style="flex:1 1 auto;gap:.5rem 1rem" hidden>
+          <button class="btn small" id="paintBtn" type="button" aria-pressed="false">Paint fog</button>
+          <span class="seg mini" role="group" aria-label="Brush">
+            <button type="button" id="fogReveal" aria-pressed="true">Reveal</button>
+            <button type="button" id="fogHide" aria-pressed="false">Hide</button>
+          </span>
+          <span class="rng"><label for="brush">Brush</label><input type="range" id="brush" min="1" max="20" value="5"></span>
+          <button class="btn small" id="revealPcs" type="button">Reveal around players</button>
+          <button class="btn small" id="revealAll" type="button">Reveal all</button>
+          <button class="btn small" id="hideAll" type="button">Hide all</button>
+          <span class="hint" id="paintHint" hidden>Drag on the map to paint. Turn off Paint fog to move tokens or pan.</span>
+        </span>
+      </div>
+      <div id="stage"></div>
+    </section>
+    <section class="pane" id="paneInv" hidden>
+      <div class="board" id="board"></div>
+    </section>
+  </main>
+
+  <aside class="side">
+    <section class="card">
+      <div class="card-head"><h2>Initiative</h2><span id="roundLbl">Not started</span></div>
+      <div class="btnrow">
+        <button class="btn small primary" id="startBtn" type="button">Start combat</button>
+        <button class="btn small" id="prevBtn" type="button">Back</button>
+        <button class="btn small" id="nextBtn" type="button">Next turn</button>
+      </div>
+      <div class="btnrow">
+        <button class="btn small" id="sortBtn" type="button">Sort</button>
+        <button class="btn small" id="rollBtn" type="button">Roll NPCs &amp; enemies</button>
+        <button class="btn small" id="addAllBtn" type="button">Add everyone</button>
+      </div>
+      <ol id="initList"></ol>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>Dice</h2><span>Private to you</span></div>
+      <div id="dice"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>Tokens</h2><span id="tokCount"></span></div>
+      <form id="addForm" autocomplete="off">
+        <div class="seg" role="group" aria-label="Token type" id="typeSeg">
+          <button type="button" data-type="pc" aria-pressed="true">Player</button>
+          <button type="button" data-type="npc" aria-pressed="false">NPC</button>
+          <button type="button" data-type="enemy" aria-pressed="false">Enemy</button>
+        </div>
+        <div class="addrow">
+          <input id="tokName" type="text" placeholder="Name" aria-label="Token name" maxlength="40">
+          <input id="tokCount2" type="number" min="1" max="20" value="1" aria-label="How many">
+        </div>
+        <button class="btn small primary" type="submit">Add to map</button>
+      </form>
+      <ul id="tokList" style="margin-top:.7rem"></ul>
+    </section>
+  </aside>
+</div>
+
+<dialog id="dlg"></dialog>
+<input type="file" id="file" accept="image/*" hidden>
+<div class="toast" id="toast" role="status" hidden></div>
+<script type="module" src="dm.js"></script>
+</body>
+</html>

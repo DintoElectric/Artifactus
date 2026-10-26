@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#161b25">
+<title>DM Table</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Alegreya:ital,wght@0,500;0,700;1,500&family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="pview">
+  <header class="ptop">
+    <div><span class="code" id="pcode"></span><span class="conn" id="conn" title="Connection"></span></div>
+    <div class="banner" id="banner" role="status"></div>
+  </header>
+  <div id="map"></div>
+  <section class="sheet" id="sheet" hidden aria-live="polite">
+    <div class="sheet-head"><h2 id="sheetTitle"></h2><button class="btn small" id="sheetClose" type="button">Close</button></div>
+    <div id="sheetBody"></div>
+    <div id="diceBody" hidden></div>
+  </section>
+  <nav class="dock" id="dock">
+    <button class="btn" data-sheet="init" type="button">Initiative</button>
+    <button class="btn" data-sheet="inv" type="button">Inventory</button>
+    <button class="btn" data-sheet="dice" type="button">Dice</button>
+    <button class="btn" id="fitBtn" type="button">Fit map</button>
+  </nav>
+</div>
+<script type="module" src="play.js"></script>
+</body>
+</html>

@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#161b25">
+<title>DM Table</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Alegreya:ital,wght@0,500;0,700;1,500&family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<main class="land">
+  <section>
+    <h1>Run the table.</h1>
+    <p class="lede">A battle map your players can follow on their phones, with initiative and loot in one place.</p>
+    <div class="mat" aria-hidden="true">
+      <div class="tok" style="--s:60px;--c:#4fb3d6;left:20%;top:30%;width:60px;height:60px"><span class="tok-face">Th</span></div>
+      <div class="tok" style="--s:60px;--c:#4fb3d6;left:33%;top:46%;width:60px;height:60px"><span class="tok-face">Ma</span></div>
+      <div class="tok turn" style="--s:60px;--c:#d9525f;left:62%;top:28%;width:60px;height:60px"><span class="tok-face">G1</span></div>
+      <div class="tok" style="--s:60px;--c:#d9525f;left:72%;top:52%;width:60px;height:60px"><span class="tok-face">G2</span></div>
+      <div class="tok" style="--s:60px;--c:#e3a93b;left:48%;top:70%;width:60px;height:60px"><span class="tok-face">Bo</span></div>
+    </div>
+  </section>
+
+  <section class="forms">
+    <div class="card" id="dmCard">
+      <h2>I'm the DM</h2>
+      <div class="seg" role="group" aria-label="DM options">
+        <button type="button" id="modeNew" aria-pressed="true">New table</button>
+        <button type="button" id="modeResume" aria-pressed="false">Resume a table</button>
+      </div>
+      <form id="dmForm">
+        <div class="field" id="codeField" hidden>
+          <label for="dmCode">Table code</label>
+          <input id="dmCode" type="text" autocapitalize="characters" autocomplete="off" maxlength="8">
+        </div>
+        <div class="field">
+          <label for="dmPin" id="pinLabel">Choose a DM PIN (4+ characters)</label>
+          <input id="dmPin" type="password" autocomplete="off">
+        </div>
+        <button class="btn primary" id="dmGo" type="submit">Create table</button>
+        <p class="err" id="dmErr" role="alert"></p>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>I'm a player</h2>
+      <form id="joinForm">
+        <div class="field">
+          <label for="joinCode">Table code from your DM</label>
+          <input id="joinCode" type="text" autocapitalize="characters" autocomplete="off" maxlength="8">
+        </div>
+        <button class="btn primary" type="submit">Join table</button>
+        <p class="err" id="joinErr" role="alert"></p>
+      </form>
+    </div>
+  </section>
+</main>
+
+<script type="module">
+import { call } from "./common.js";
+const $ = (s) => document.querySelector(s);
+let mode = "new";
+
+const setMode = (m) => {
+  mode = m;
+  $("#modeNew").setAttribute("aria-pressed", m === "new");
+  $("#modeResume").setAttribute("aria-pressed", m === "resume");
+  $("#codeField").hidden = m === "new";
+  $("#pinLabel").textContent = m === "new" ? "Choose a DM PIN (4+ characters)" : "DM PIN";
+  $("#dmGo").textContent = m === "new" ? "Create table" : "Resume table";
+  $("#dmErr").textContent = "";
+};
+$("#modeNew").onclick = () => setMode("new");
+$("#modeResume").onclick = () => setMode("resume");
+
+const last = JSON.parse(localStorage.getItem("dmTable") || "null");
+if (last) { setMode("resume"); $("#dmCode").value = last.room; }
+
+$("#dmForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("#dmErr").textContent = "";
+  const pin = $("#dmPin").value;
+  try {
+    let room;
+    if (mode === "new") {
+      room = (await call("table", { method: "POST", body: { pin } })).room;
+    } else {
+      room = $("#dmCode").value.trim().toUpperCase();
+      await call(`login/${room}`, { method: "POST", body: { pin } });
+    }
+    localStorage.setItem("dmTable", JSON.stringify({ room, pin }));
+    location.href = "dm.html";
+  } catch (err) {
+    $("#dmErr").textContent = err.message;
+  }
+});
+
+$("#joinForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("#joinErr").textContent = "";
+  const room = $("#joinCode").value.trim().toUpperCase();
+  try {
+    await call(`state/${room}`);
+    location.href = `play.html?room=${encodeURIComponent(room)}`;
+  } catch (err) {
+    $("#joinErr").textContent = err.message;
+  }
+});
+</script>
+</body>
+</html>
