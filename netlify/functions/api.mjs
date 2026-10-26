@@ -22,6 +22,10 @@
 //   GET    /api/campdoc/CODE      DM reads the campaign details and session log  header x-pin
 //   PUT    /api/campdoc/CODE      DM saves them                  { doc }
 //   GET    /api/campaign/CODE     what the DM has chosen to share with players
+//   POST   /api/ping/CODE         a player pings a spot on the map  { x, y, pid?, id? }
+//   GET    /api/pings/CODE        recent pings (they fade after a few seconds)
+//   POST   /api/move/CODE         a player asks to move their character  { id, x, y }
+//   DELETE /api/move/CODE/PID     cancel or clear a move request   (the player, or the DM with x-pin)
 //   GET    /api/locs/CODE         DM reads the saved locations (maps, grid, fog, token spots)  header x-pin
 //   PUT    /api/locs/CODE         DM saves them                  { doc }
 //   PUT|GET|DELETE /api/map/CODE/LOC, /api/fog/CODE/LOC, /api/thumb/CODE/LOC   a location's own files
@@ -60,6 +64,8 @@ const blankState = () => ({
   subT: 0,
   feedOn: false,
   campRev: 0,
+  freeExplore: false,
+  moveResults: {},
   locId: "",
   locName: "",
   objectives: [],
@@ -231,6 +237,14 @@ function sharedCamp(d) {
   return { rev: d.rev, campaign: { name: d.campaign.name, fields }, sessions };
 }
 
+/* Pings: short-lived markers anyone at the table can drop on the map. */
+const PING_TTL = 8000, MAX_PINGS = 12;
+const livePings = async (store, room) => {
+  const b = await store.get(`pings/${room}`, { type: "json" });
+  const now = Date.now();
+  return (b?.list || []).filter((p) => now - p.t < PING_TTL);
+};
+
 /* Saved locations: each remembers its map, grid, fog and where the tokens stood. DM-only document. */
 const flt = (v, lo, hi, def) => { const n = Number(v); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : def; };
 function cleanGrid(g) {
@@ -324,8 +338,11 @@ export default async (req) => {
       const ft = Number(url.searchParams.get("ft") || 0);
       const keys = state.feedOn ? await feedKeys(store, room) : null;
       const latest = keys && keys.length ? keyTime(keys[keys.length - 1], room) : 0;
-      if (rev && Number(rev) === state.rev && (!keys || ft === latest)) return reply({ unchanged: true });
-      return reply({ state: publicView(state), feed: keys ? readFeed(keys, room, 30) : null });
+      const pt = Number(url.searchParams.get("pt") || 0);
+      const pings = state.mapOn ? await livePings(store, room) : [];
+      const latestPing = pings.length ? pings[pings.length - 1].t : 0;
+      if (rev && Number(rev) === state.rev && (!keys || ft === latest) && pt === latestPing) return reply({ unchanged: true });
+      return reply({ state: publicView(state), feed: keys ? readFeed(keys, room, 30) : null, pings, now: Date.now() });
     }
 
     if (route === "state" && req.method === "PUT") {
@@ -563,6 +580,48 @@ export default async (req) => {
       return reply({ ok: true, rev });
     }
 
+    if (route === "pings" && req.method === "GET") {
+      return reply({ now: Date.now(), pings: await livePings(store, room) });
+    }
+    if (route === "ping" && req.method === "POST") {
+      const b = await req.json().catch(() => ({}));
+      const x = flt(b.x, 0, 1, NaN), y = flt(b.y, 0, 1, NaN);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return fail(400, "Bad spot.");
+      let who = "Player", pid = "";
+      if (b.pid) {
+        const state = await store.get(`state/${room}`, { type: "json" });
+        const e = state?.ents?.find((z) => z.id === b.pid && z.type === "pc");
+        if (e && (await mayActAs(e.id))) { who = e.name; pid = e.id; }
+      }
+      const id = cleanId(b.id) || Math.random().toString(36).slice(2, 9);
+      const list = [...(await livePings(store, room)).filter((p) => p.id !== id), { id, t: Date.now(), x, y, who: str(who, 30), pid }].slice(-MAX_PINGS);
+      await store.setJSON(`pings/${room}`, { list });
+      return reply({ ok: true, id });
+    }
+
+    // A player asks to move their character. Nothing moves until the DM approves.
+    if (route === "move" && req.method === "POST") {
+      const { id, x, y } = await req.json().catch(() => ({}));
+      const nx = flt(x, 0, 1, NaN), ny = flt(y, 0, 1, NaN);
+      if (!Number.isFinite(nx) || !Number.isFinite(ny)) return fail(400, "Bad spot.");
+      const state = await store.get(`state/${room}`, { type: "json" });
+      const e = state?.ents?.find((z) => z.id === id && z.type === "pc");
+      if (!e) return fail(400, "Pick one of the player characters.");
+      if (!(await mayActAs(e.id))) return needLogin();
+      if (!state.mapOn) return fail(403, "The map isn't showing right now.");
+      if (state.init?.on) { if (state.init.turnId !== e.id) return fail(403, "It isn't your turn."); }
+      else if (!state.freeExplore) return fail(403, "Free explore is off. Ask your DM.");
+      const t = Date.now();
+      await store.setJSON(`mvreq/${room}/${cleanId(e.id)}`, { id: e.id, x: nx, y: ny, t });
+      return reply({ ok: true, t });
+    }
+    if (route === "move" && req.method === "DELETE") {
+      if (!sid) return fail(400, "Missing id.");
+      if (!(await mayActAs(sid))) return needLogin();
+      await store.delete(`mvreq/${room}/${sid}`);
+      return reply({ ok: true });
+    }
+
     if (route === "subs" && req.method === "GET") {
       const denied = await dmOnly();
       if (denied) return denied;
@@ -571,8 +630,8 @@ export default async (req) => {
         const items = await Promise.all(blobs.map((b) => store.get(b.key, { type: "json" })));
         return items.filter(Boolean).map((x) => ({ ...x, kind }));
       };
-      const [inits, hps] = await Promise.all([read(`sub/${room}/`, "init"), read(`pcu/${room}/`, "hp")]);
-      return reply([...inits, ...hps]);
+      const [inits, hps, moves] = await Promise.all([read(`sub/${room}/`, "init"), read(`pcu/${room}/`, "hp"), read(`mvreq/${room}/`, "move")]);
+      return reply([...inits, ...hps, ...moves]);
     }
 
     return fail(404, "Not found.");

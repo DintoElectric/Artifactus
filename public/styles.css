@@ -410,3 +410,30 @@ dialog h2{margin-bottom:1rem}
 .locinfo p{margin:0;color:var(--mute);font-size:.93rem;white-space:pre-wrap}
 .locact{display:flex;gap:.4rem;padding:.6rem .75rem .75rem}
 .locact .btn:first-child{flex:1}
+
+/* ---------- pings and move requests ---------- */
+.mapwrap{position:relative;min-height:0}
+.mapwrap #map{position:absolute;inset:0}
+.mv-over{position:absolute;left:0;top:0;pointer-events:none;z-index:2}
+.mv.tap{cursor:crosshair}
+.mv-over .ping{animation:pingfade 8s linear forwards}
+.mv-over .ping .r{fill:none;stroke:var(--c);transform-box:fill-box;transform-origin:center;animation:pingring 1.4s ease-out 4}
+.mv-over .ping .r2{animation-delay:.5s}
+.mv-over .ping .dot{fill:var(--c);stroke:#fff;stroke-width:2}
+.mv-over text{fill:#fff;font-family:var(--sans);font-weight:700;paint-order:stroke;stroke:rgba(0,0,0,.8);stroke-width:.22em;stroke-linejoin:round}
+.mv-over .ghost circle{fill:rgba(255,255,255,.1);stroke:var(--c)}
+.mv-over .ghost line{stroke:var(--c);opacity:.85}
+@keyframes pingring{from{transform:scale(.35);opacity:.95}to{transform:scale(2.6);opacity:0}}
+@keyframes pingfade{0%,78%{opacity:1}100%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.mv-over .ping,.mv-over .ping .r{animation:none}.mv-over .ping .r{opacity:.7}}
+.mapfloat{position:absolute;right:.6rem;top:.6rem;display:grid;gap:.4rem;justify-items:end;max-width:min(78%,20rem);z-index:5}
+.mapbtns{display:flex;gap:.4rem}
+.mapbtns .btn{min-height:44px;min-width:4.6rem;background:rgba(32,38,54,.94);box-shadow:0 4px 14px rgba(0,0,0,.4)}
+.mapbtns .btn[aria-pressed="true"]{background:var(--brass)}
+.mapbtns .btn:disabled{opacity:.55}
+.mapmsg{background:rgba(10,13,20,.88);padding:.35rem .65rem;border-radius:8px;font-size:.93rem;text-align:right}
+.mapmsg:empty{display:none}
+.movebar{display:flex;gap:.45rem;align-items:center;flex-wrap:wrap;justify-content:flex-end;background:rgba(10,13,20,.94);padding:.5rem .6rem;border-radius:10px;border:1px solid var(--brass)}
+.mrow{display:flex;align-items:center;gap:.4rem;padding:.3rem 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.mrow .mname{flex:1 1 8rem;min-width:0}
+.mrow small{color:var(--mute)}

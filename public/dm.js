@@ -1,4 +1,4 @@
-import { call, uid, esc, clamp, TYPES, MapView } from "./common.js";
+import { call, uid, esc, clamp, TYPES, MapView, pingColor, PING_TTL } from "./common.js";
 import { mountRoller } from "./dice.js";
 import { SheetStore, mountBook, mountNotes, blankSheet } from "./sheet.js";
 import { Library, parseSpells } from "./library.js";
@@ -147,6 +147,8 @@ function renderMap() {
   $("#gridDark").checked = !!state.grid.dark;
   $("#snapOn").checked = !!state.grid.snap;
   $("#mapOn").checked = !!state.mapOn;
+  $("#freeExplore").checked = !!state.freeExplore;
+  $("#autoApprove").checked = !!state.autoApprove;
   const sz = $("#gridSize");
   sz.max = Math.max(40, Math.round(Math.max(state.mapW, state.mapH) / 6));
   sz.value = state.grid.size;
@@ -160,6 +162,8 @@ $("#file").addEventListener("change", async (e) => {
 });
 $("#fit").onclick = () => mv.fit();
 $("#mapOn").onchange = (e) => { state.mapOn = e.target.checked; changed(); };
+$("#freeExplore").onchange = (e) => { state.freeExplore = e.target.checked; changed(); };
+$("#autoApprove").onchange = (e) => { state.autoApprove = e.target.checked; changed(); };
 $("#gridOn").onchange = (e) => { state.grid.on = e.target.checked; changed(); };
 $("#snapOn").onchange = (e) => { state.grid.snap = e.target.checked; bump(); scheduleSave(); renderMap(); };
 function gridChanged() {
@@ -1008,14 +1012,98 @@ $("#objList").addEventListener("change", (e) => {
   }
 });
 
+/* ---------- pings and move requests from players ---------- */
+let dmPings = [];        // pings on the map right now: { id, x, y, label, color, expires }
+let pendingMoves = [];   // move requests waiting for a decision (from the server)
+const handledMoves = new Set();
+
+function refreshOverlays() {
+  const now = Date.now();
+  dmPings = dmPings.filter((p) => p.expires > now);
+  mv.setOverlays({
+    pings: dmPings.map(({ expires, ...p }) => p),
+    moves: pendingMoves.map((m) => {
+      const e = ent(m.id);
+      return { x: m.x, y: m.y, fromX: e?.x, fromY: e?.y, color: pingColor(m.id), label: e?.name || "?" };
+    }),
+  });
+}
+setInterval(refreshOverlays, 1000);
+
+async function pollPings() {
+  if (!state || document.hidden) return;
+  try {
+    const r = await call(`pings/${room}`);
+    const now = Date.now();
+    dmPings = r.pings.map((p) => ({ id: p.id, x: p.x, y: p.y, label: p.who, color: pingColor(p.pid || p.who), expires: now + (PING_TTL - (r.now - p.t)) }));
+    refreshOverlays();
+  } catch { /* try again on the next tick */ }
+}
+
+function renderMoves() {
+  $("#moveList").innerHTML = pendingMoves.length ? pendingMoves.map((m) => {
+    const e = ent(m.id);
+    const ok = mv.isRevealed(m.x, m.y) && mv.inShape(m.x, m.y);
+    return `<li class="mrow" data-id="${m.id}">
+      <span class="dot" style="--c:${pingColor(m.id)}"></span>
+      <span class="mname">${esc(e?.name || "A player")}${ok ? "" : " <small>(under fog or outside the area)</small>"}</span>
+      <button class="btn small ghost" data-act="show">Show</button>
+      <button class="btn small primary" data-act="approve">Approve</button>
+      <button class="btn small" data-act="deny">Deny</button>
+    </li>`;
+  }).join("") : `<li class="empty">${state.freeExplore ? "No requests right now." : "Players can ask to move on their turn, or any time when Free explore is on."}</li>`;
+}
+
+async function resolveMove(req, ok) {
+  handledMoves.add(`${req.id}:${req.t}`);
+  const e = ent(req.id);
+  if (ok && e) {
+    const p = mv.snapPoint(req.x, req.y);
+    e.x = p.x; e.y = p.y;
+  }
+  state.moveResults ||= {};
+  state.moveResults[req.id] = { req: req.t, ok, t: Date.now() };
+  pendingMoves = pendingMoves.filter((m) => m.id !== req.id);
+  changed();
+  renderMoves();
+  refreshOverlays();
+  call(`move/${room}/${req.id}`, { method: "DELETE", pin }).catch(() => {});
+  toast(ok ? `${e?.name || "Player"} moved.` : `Denied ${e?.name || "the"} move.`);
+}
+
+$("#moveList").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-act]");
+  const row = e.target.closest(".mrow");
+  if (!b || !row) return;
+  const req = pendingMoves.find((m) => m.id === row.dataset.id);
+  if (!req) return;
+  if (b.dataset.act === "show") { mv.focusAt(req.x, req.y); setTab("map"); }
+  else resolveMove(req, b.dataset.act === "approve");
+});
+
+/* Called with the latest list of requests from the server. */
+function updateMoves(list) {
+  pendingMoves = list.filter((m) => !handledMoves.has(`${m.id}:${m.t}`) && ent(m.id));
+  if (state.autoApprove) {
+    for (const m of [...pendingMoves]) {
+      if (mv.isRevealed(m.x, m.y) && mv.inShape(m.x, m.y)) resolveMove(m, true);   // anything odd waits for you
+    }
+  }
+  const key = JSON.stringify(pendingMoves.map((m) => [m.id, m.t]));
+  if (key !== lastMoveKey) { lastMoveKey = key; renderMoves(); }   // don't rebuild the buttons while you're about to click one
+  refreshOverlays();
+}
+let lastMoveKey = "";
+
 /* ---------- initiative sent by players ---------- */
 async function pullSubs() {
   if (!state || document.hidden) return;
   try {
     const subs = await call(`subs/${room}`, { pin });
+    updateMoves(subs.filter((s) => s.kind === "move"));
     const seen = state.subT || 0;
     let maxT = seen, applied = 0;
-    for (const sub of [...subs].sort((a, b) => a.t - b.t)) {
+    for (const sub of [...subs].filter((s) => s.kind !== "move").sort((a, b) => a.t - b.t)) {
       if (sub.t <= seen) continue;
       maxT = Math.max(maxT, sub.t);
       const e = ent(sub.id);
@@ -1100,6 +1188,9 @@ $("#leave").onclick = () => {
     state.grid.areas ||= [];
     state.feedOn ??= false;
     state.campRev ??= 0;
+    state.freeExplore ??= false;
+    state.autoApprove ??= false;
+    state.moveResults ||= {};
     state.locId ??= "";
     state.locName ??= "";
     state.objectives ||= [];
@@ -1127,6 +1218,8 @@ $("#leave").onclick = () => {
     pullSubs();
     pullFeed();
     setInterval(() => { pullSubs(); pullFeed(); }, 3000);
+    setInterval(pollPings, 1500);
+    renderMoves();
     setInterval(pullSheets, 4000);
   } catch (err) {
     if (err.status === 401 || err.status === 404) {

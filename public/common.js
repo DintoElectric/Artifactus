@@ -4,6 +4,14 @@ export const TYPES = {
   enemy: { label: "Enemy", color: "#d9525f" },
 };
 
+export const PING_TTL = 8000;   // how long a ping stays on the map (milliseconds)
+/* A steady colour for each person, so their pings and move ghosts are easy to tell apart. */
+export const pingColor = (key) => {
+  let h = 0;
+  for (const c of String(key || "x")) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return `hsl(${h % 360} 78% 62%)`;
+};
+
 export const uid = () => Math.random().toString(36).slice(2, 9);
 export const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
 
@@ -78,13 +86,18 @@ export class MapView {
     if (!this.interactive) root.classList.add("ro");
     root.innerHTML =
       '<div class="mv-world" style="display:none"><img class="mv-img" alt="" draggable="false">' +
-      '<div class="mv-grid"></div><canvas class="mv-fog" style="display:none"></canvas><div class="mv-tokens"></div><svg class="mv-shape" xmlns="http://www.w3.org/2000/svg"></svg></div><div class="mv-empty"></div>';
+      '<div class="mv-grid"></div><canvas class="mv-fog" style="display:none"></canvas><div class="mv-tokens"></div><svg class="mv-over" xmlns="http://www.w3.org/2000/svg"></svg><svg class="mv-shape" xmlns="http://www.w3.org/2000/svg"></svg></div><div class="mv-empty"></div>';
     this.world = root.querySelector(".mv-world");
     this.img = root.querySelector(".mv-img");
     this.gridEl = root.querySelector(".mv-grid");
     this.fogCanvas = root.querySelector(".mv-fog");
     this.tokLayer = root.querySelector(".mv-tokens");
     this.shapeEl = root.querySelector(".mv-shape");
+    this.overEl = root.querySelector(".mv-over");
+    this.overlay = { pings: [], moves: [] };
+    this.overKey = "";
+    this.tapMode = null;     // "ping" or "move": the next tap reports a spot on the map
+    this.fogReady = false;
     this.empty = root.querySelector(".mv-empty");
     this.empty.textContent = opts.emptyText || "No map loaded";
 
@@ -149,6 +162,7 @@ export class MapView {
     const g = Math.max(8, this.grid.size || 60);
     this.renderGrid();
     this.renderShapes();
+    this.renderOverlays(true);
     const seen = new Set();
     for (const e of this.ents) {
       seen.add(e.id);
@@ -215,11 +229,13 @@ export class MapView {
     if (this.fogKey === this.fog.key && !force) return;
     this.fogKey = this.fog.key;
     const ctx = c.getContext("2d");
+    this.fogReady = false;
     const hideAll = () => {
       ctx.globalCompositeOperation = "source-over";
       ctx.clearRect(0, 0, cw, ch);
       ctx.fillStyle = "#000";
       ctx.fillRect(0, 0, cw, ch);
+      this.fogReady = true;
     };
     if (!this.fog.url) { hideAll(); return; }
     const token = ++this.fogLoad;
@@ -229,12 +245,94 @@ export class MapView {
       ctx.globalCompositeOperation = "source-over";
       ctx.clearRect(0, 0, cw, ch);
       ctx.drawImage(im, 0, 0, cw, ch);
+      this.fogReady = true;
     };
     im.onerror = () => { if (token === this.fogLoad) hideAll(); };
     im.src = this.fog.url;
   }
 
-  markFogKey(key) { this.fog.key = key; this.fogKey = key; }
+  markFogKey(key) { this.fog.key = key; this.fogKey = key; this.fogReady = true; }
+
+  /* Is this spot (0..1 across the map) visible, i.e. not hidden under fog? */
+  isRevealed(nx, ny) {
+    if (!this.fog.on) return true;
+    const c = this.fogCanvas;
+    if (!c.width || !this.fogReady) return false;
+    const x = Math.min(c.width - 1, Math.max(0, Math.floor(nx * c.width)));
+    const y = Math.min(c.height - 1, Math.max(0, Math.floor(ny * c.height)));
+    return c.getContext("2d").getImageData(x, y, 1, 1).data[3] < 128;
+  }
+
+  /* Is this spot inside the areas the DM outlined for the grid? (No outlines means everywhere.) */
+  inShape(nx, ny) {
+    const areas = (this.grid.areas || []).filter((a) => a.length >= 3);
+    if (!areas.length) return true;
+    return areas.some((poly) => {
+      let inside = false;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const [xi, yi] = poly[i], [xj, yj] = poly[j];
+        if ((yi > ny) !== (yj > ny) && nx < ((xj - xi) * (ny - yi)) / (yj - yi) + xi) inside = !inside;
+      }
+      return inside;
+    });
+  }
+
+  /* Snap a spot to the middle of its grid square when snapping is on. */
+  snapPoint(nx, ny) {
+    if (!(this.grid.snap && this.grid.on) || !this.dim.w) return { x: nx, y: ny };
+    const g = this.grid.size, ox = this.grid.ox || 0, oy = this.grid.oy || 0;
+    const wx = (Math.floor((nx * this.dim.w - ox) / g) + 0.5) * g + ox;
+    const wy = (Math.floor((ny * this.dim.h - oy) / g) + 0.5) * g + oy;
+    return { x: clamp(wx / this.dim.w, 0, 1), y: clamp(wy / this.dim.h, 0, 1) };
+  }
+
+  focusAt(nx, ny) {
+    if (!this.dim.w) return;
+    const r = this.root.getBoundingClientRect();
+    this.view.x = r.width / 2 - nx * this.dim.w * this.view.k;
+    this.view.y = r.height / 2 - ny * this.dim.h * this.view.k;
+    this.autoFit = false;
+    this.apply();
+  }
+
+  setTapMode(mode) {
+    this.tapMode = mode || null;
+    this.root.classList.toggle("tap", !!this.tapMode);
+  }
+
+  /* Pings (pulsing rings) and move ghosts (dashed outline with a line from the token). */
+  setOverlays({ pings = [], moves = [] }) {
+    this.overlay = { pings, moves };
+    this.renderOverlays(false);
+  }
+
+  renderOverlays(force) {
+    const { w, h } = this.dim;
+    const svg = this.overEl;
+    if (!w) { svg.innerHTML = ""; this.overKey = ""; return; }
+    const key = JSON.stringify([this.overlay, this.grid.size]);
+    if (!force && key === this.overKey) return;
+    this.overKey = key;
+    svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+    svg.style.width = w + "px";
+    svg.style.height = h + "px";
+    const g = Math.max(8, this.grid.size || 60), fs = g * 0.3;
+    let out = "";
+    for (const m of this.overlay.moves) {
+      const x = m.x * w, y = m.y * h;
+      out += `<g class="ghost" style="--c:${m.color}">`;
+      if (m.fromX != null) out += `<line x1="${m.fromX * w}" y1="${m.fromY * h}" x2="${x}" y2="${y}" stroke-width="${g * 0.07}" stroke-dasharray="${g * 0.2} ${g * 0.15}"/>`;
+      out += `<circle cx="${x}" cy="${y}" r="${g * 0.45}" stroke-width="${g * 0.08}" stroke-dasharray="${g * 0.18} ${g * 0.12}"/>`;
+      out += `<text x="${x}" y="${y + g * 0.45 + fs * 1.1}" font-size="${fs}" text-anchor="middle">${esc(m.label || "")}</text></g>`;
+    }
+    for (const p of this.overlay.pings) {
+      const x = p.x * w, y = p.y * h;
+      out += `<g class="ping" style="--c:${p.color}"><circle class="r r1" cx="${x}" cy="${y}" r="${g * 0.4}" stroke-width="${g * 0.09}"/>` +
+        `<circle class="r r2" cx="${x}" cy="${y}" r="${g * 0.4}" stroke-width="${g * 0.09}"/><circle class="dot" cx="${x}" cy="${y}" r="${g * 0.1}"/>` +
+        `<text x="${x}" y="${y - g * 0.55}" font-size="${fs}" text-anchor="middle">${esc(p.label || "")}</text></g>`;
+    }
+    svg.innerHTML = out;
+  }
 
   paint(x0, y0, x1, y1, r, reveal) {
     const c = this.fogCanvas;
@@ -524,6 +622,10 @@ export class MapView {
       return;
     }
     const tap = this.pointers.get(e.pointerId);
+    if (this.tapMode && tap && this.pointers.size === 1 && !this.multi && Math.hypot(e.clientX - tap.sx, e.clientY - tap.sy) < 6) {
+      const n = this.toNorm(e.clientX, e.clientY, false);
+      this.cb.onTap?.(n.x, n.y, this.tapMode);
+    }
     if (this.shapeMode && this.interactive && tap && this.pointers.size === 1 && !this.multi
         && Math.hypot(e.clientX - tap.sx, e.clientY - tap.sy) < 6) {
       const n = this.toNorm(e.clientX, e.clientY, false);

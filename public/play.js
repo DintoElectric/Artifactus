@@ -1,4 +1,4 @@
-import { call, esc, TYPES, MapView } from "./common.js";
+import { call, esc, TYPES, MapView, uid, pingColor, PING_TTL } from "./common.js";
 import { mountRoller, rand } from "./dice.js";
 import { SheetStore, mountBook, mountNotes } from "./sheet.js";
 import { mountChar } from "./charsheet.js";
@@ -15,7 +15,7 @@ const EMPTY_MAP = "Waiting for the DM to show the map…";
 const TITLES = { init: "Initiative", goals: "Goals", camp: "Campaign", inv: "Items", char: "Character sheet", spells: "Spells", notes: "Notes", dice: "Dice" };
 const PANES = { init: "sheetBody", goals: "sheetBody", camp: "campBody", inv: "sheetBody", char: "charBody", spells: "spellBody", notes: "noteBody", dice: "diceBody" };
 
-let st = null, rev = "", ft = 0, feed = null, sheet = null, sheetKey = "", initMsg = "";
+let st = null, rev = "", ft = 0, pt = 0, feed = null, sheet = null, sheetKey = "", initMsg = "";
 let mod = parseInt(localStorage.getItem("mod:" + room)) || 0;
 
 /* ---------- who am I: logging in to a character ---------- */
@@ -33,6 +33,8 @@ function saveSession(s) {
   if (s) localStorage.setItem(LKEY, JSON.stringify(s)); else localStorage.removeItem(LKEY);
   sheetKey = "";
   storePid = "";
+  pendingMove = null; moveSel = null; mapMode = null;
+  mv.setTapMode(null);
   updateWho();
   if (st) { render(); renderSheet(true); }
 }
@@ -129,6 +131,7 @@ function maybeAskLogin() {
 const mv = new MapView($("#map"), {
   interactive: false,
   emptyText: EMPTY_MAP,
+  onTap: (x, y, mode) => onMapTap(x, y, mode),
   imgUrl: (e) => (e.img ? `/api/img/${room}/${e.id}?v=${e.img}` : null),
 });
 
@@ -143,6 +146,134 @@ function setDockHeight() {
 }
 setDockHeight();
 window.addEventListener("resize", setDockHeight);
+
+/* ---------- pings and move requests ---------- */
+let pings = [];              // { id, x, y, label, color, expires }
+let mapMode = null;          // "ping" | "move" | null: what the next tap on the map does
+let moveSel = null;          // a spot picked but not yet sent
+let pendingMove = null;      // a request the DM hasn't answered yet: { t, x, y, sent }
+let lastPing = 0, mapMsgTimer = null;
+
+function mapMsg(text, ms = 4500) {
+  $("#mapMsg").textContent = text;
+  clearTimeout(mapMsgTimer);
+  if (text && ms) mapMsgTimer = setTimeout(() => { $("#mapMsg").textContent = ""; }, ms);
+}
+
+/* May this player ask to move right now? Their turn in combat, or free explore out of combat. */
+function moveState() {
+  if (!me) return { ok: false, why: "Log in to move your character." };
+  if (!(st.mapOn && st.mapRev)) return { ok: false, why: "" };
+  const I = st.init;
+  if (I.on) return I.turnId === me ? { ok: true } : { ok: false, why: "You can move on your turn." };
+  return st.freeExplore ? { ok: true } : { ok: false, why: "Free explore is off. Ask your DM." };
+}
+
+function refreshOverlays() {
+  const now = Date.now();
+  pings = pings.filter((p) => p.expires > now);
+  const mine = st?.ents.find((e) => e.id === me);
+  const color = pingColor(me || "x");
+  const moves = [];
+  if (pendingMove) moves.push({ x: pendingMove.x, y: pendingMove.y, fromX: mine?.x, fromY: mine?.y, color, label: "Waiting for your DM…" });
+  else if (moveSel) moves.push({ x: moveSel.x, y: moveSel.y, fromX: mine?.x, fromY: mine?.y, color, label: "Move here?" });
+  mv.setOverlays({ pings: pings.map(({ expires, ...p }) => p), moves });
+}
+setInterval(refreshOverlays, 1000);
+
+function addPing(p, life) {
+  pings = pings.filter((x) => x.id !== p.id);
+  pings.push({ ...p, expires: Date.now() + life });
+  refreshOverlays();
+}
+
+function setMapMode(mode) {
+  mapMode = mapMode === mode ? null : mode;
+  if (mapMode !== "move") moveSel = null;
+  mv.setTapMode(mapMode);
+  updateMapUI();
+}
+
+function onMapTap(x, y, mode) {
+  if (!st) return;
+  if (mode === "ping") {
+    if (!mv.isRevealed(x, y)) { mapMsg("You can't see that area yet."); return; }
+    if (Date.now() - lastPing < 1200) { mapMsg("Wait a moment before pinging again."); return; }
+    lastPing = Date.now();
+    const id = uid();
+    addPing({ id, x, y, label: session?.name || "You", color: pingColor(me || "x") }, PING_TTL);
+    call(`ping/${room}`, { method: "POST", body: { x, y, pid: me || undefined, id }, ...auth() }).catch(() => {});
+    setMapMode(null);
+  } else if (mode === "move") {
+    const ms = moveState();
+    if (!ms.ok) { mapMsg(ms.why); setMapMode(null); return; }
+    if (!mv.isRevealed(x, y)) { mapMsg("That area is hidden by fog. Pick a spot you can see."); return; }
+    if (!mv.inShape(x, y)) { mapMsg("You can't go there. Pick a spot inside the open area."); return; }
+    moveSel = mv.snapPoint(x, y);
+    updateMapUI();
+  }
+}
+
+function updateMapUI() {
+  const showMap = !!(st && st.mapOn && st.mapRev);
+  $("#mapFloat").hidden = !showMap;
+  if (!showMap) { mapMode = null; moveSel = null; mv.setTapMode(null); return; }
+  const ms = moveState();
+  if (mapMode === "move" && !ms.ok) { mapMode = null; moveSel = null; mv.setTapMode(null); }
+  $("#pingBtn").setAttribute("aria-pressed", mapMode === "ping");
+  const mb = $("#moveBtn");
+  mb.hidden = !me;
+  mb.disabled = !ms.ok && !pendingMove;
+  mb.setAttribute("aria-pressed", mapMode === "move");
+  mb.textContent = pendingMove ? "Cancel move" : "Move";
+  $("#moveReason").textContent = me && !ms.ok && !pendingMove ? ms.why : "";
+  $("#moveBar").hidden = !moveSel;
+  if (!$("#mapMsg").textContent) {
+    if (mapMode === "ping") mapMsg("Tap the map to ping a spot.", 0);
+    else if (mapMode === "move" && !moveSel) mapMsg("Tap where you want to go.", 0);
+  } else if (!mapMode && /^Tap /.test($("#mapMsg").textContent)) mapMsg("");
+  refreshOverlays();
+}
+
+$("#pingBtn").onclick = () => { mapMsg(""); setMapMode("ping"); };
+$("#moveBtn").onclick = async () => {
+  if (pendingMove) {
+    pendingMove = null;
+    call(`move/${room}/${me}`, { method: "DELETE", ...auth() }).catch(() => {});
+    mapMsg("Move cancelled.");
+    updateMapUI();
+    return;
+  }
+  mapMsg("");
+  setMapMode("move");
+};
+$("#moveCancel").onclick = () => { moveSel = null; setMapMode(null); mapMsg(""); };
+$("#moveSend").onclick = async () => {
+  if (!moveSel) return;
+  const spot = moveSel;
+  try {
+    const r = await call(`move/${room}`, { method: "POST", body: { id: me, x: spot.x, y: spot.y }, ...auth() });
+    pendingMove = { t: r.t, x: spot.x, y: spot.y, sent: Date.now() };
+    moveSel = null;
+    mapMode = null;
+    mv.setTapMode(null);
+    mapMsg("Sent. Waiting for your DM to approve.", 6000);
+  } catch (err) {
+    if (err.status === 401) { logout("Your login changed, so please sign in again."); return; }
+    mapMsg(err.message);
+  }
+  updateMapUI();
+};
+
+/* The DM answers through the table state. */
+function checkMoveAnswer() {
+  const res = st.moveResults?.[me];
+  if (pendingMove && res && res.req === pendingMove.t) {
+    mapMsg(res.ok ? "Your DM approved the move." : "Your DM denied the move.", 6000);
+    pendingMove = null;
+  }
+  if (pendingMove && Date.now() - pendingMove.sent > 10 * 60 * 1000) pendingMove = null;
+}
 
 function render() {
   const I = st.init;
@@ -162,6 +293,8 @@ function render() {
   renderFeed();
   renderSheet(false);
   charUI?.refresh();
+  checkMoveAnswer();
+  updateMapUI();
 }
 
 function renderFeed() {
@@ -402,13 +535,18 @@ const schedule = () => { clearTimeout(timer); timer = setTimeout(poll, 2000); };
 async function poll() {
   if (document.hidden) { schedule(); return; }
   try {
-    const r = await call(`state/${room}?rev=${rev}&ft=${ft}`);
+    const r = await call(`state/${room}?rev=${rev}&ft=${ft}&pt=${pt}`);
     $("#conn").classList.remove("off");
     if (!r.unchanged) {
       const first = !st;
       st = r.state; rev = st.rev;
       feed = r.feed || null;
       ft = feed && feed.length ? feed[0].t : 0;
+      const live = r.pings || [];
+      pt = live.length ? live[live.length - 1].t : 0;
+      for (const p of live) {
+        addPing({ id: p.id, x: p.x, y: p.y, label: p.pid && p.pid === me ? (session?.name || p.who) : p.who, color: pingColor(p.pid || p.who) }, PING_TTL - (r.now - p.t));
+      }
       render();
       if (first || !session) maybeAskLogin();
     }

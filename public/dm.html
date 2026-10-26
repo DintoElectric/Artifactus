@@ -25,6 +25,7 @@
     </nav>
     <span class="grow"></span>
     <label class="check"><input type="checkbox" id="mapOn"> Map visible to players</label>
+    <label class="check" title="Out of combat, players can ask to move their characters"><input type="checkbox" id="freeExplore"> Free explore</label>
     <span class="sync" id="sync" role="status">Saved</span>
     <button class="btn small ghost" id="leave" type="button">Leave</button>
   </header>
@@ -104,6 +105,11 @@
   </main>
 
   <aside class="side">
+    <section class="card" id="moveCard">
+      <div class="card-head"><h2>Move requests</h2><label class="check"><input type="checkbox" id="autoApprove"> Auto-approve</label></div>
+      <ul id="moveList"></ul>
+    </section>
+
     <section class="card">
       <div class="card-head"><h2>Initiative</h2><span id="roundLbl">Not started</span></div>
       <div class="btnrow">
