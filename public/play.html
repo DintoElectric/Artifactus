@@ -20,7 +20,13 @@
   <section class="sheet" id="sheet" hidden aria-live="polite">
     <div class="sheet-head"><h2 id="sheetTitle"></h2><button class="btn small" id="sheetClose" type="button">Close</button></div>
     <div id="sheetBody"></div>
-    <div id="diceBody" hidden></div>
+    <div id="diceBody" hidden>
+      <div id="roller"></div>
+      <div class="feedbox" id="feedWrap" hidden>
+        <h3>Table rolls</h3>
+        <ol class="feed" id="feedList"></ol>
+      </div>
+    </div>
   </section>
   <nav class="dock" id="dock">
     <button class="btn" data-sheet="init" type="button">Initiative</button>

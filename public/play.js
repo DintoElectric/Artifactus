@@ -7,7 +7,7 @@ if (!room) { location.replace("/"); throw new Error("No table"); }
 $("#pcode").textContent = room;
 
 const EMPTY_MAP = "Waiting for the DM to show the map…";
-let st = null, rev = "", sheet = null, sheetKey = "", initMsg = "";
+let st = null, rev = "", ft = 0, feed = null, sheet = null, sheetKey = "", initMsg = "";
 let me = localStorage.getItem("me:" + room) || "";
 let mod = parseInt(localStorage.getItem("mod:" + room)) || 0;
 
@@ -16,7 +16,11 @@ const mv = new MapView($("#map"), {
   emptyText: EMPTY_MAP,
   imgUrl: (e) => (e.img ? `/api/img/${room}/${e.id}?v=${e.img}` : null),
 });
-mountRoller($("#diceBody"));
+// Every roll goes to the DM; the DM decides whether the other players see the feed.
+function postRoll(r) {
+  call(`roll/${room}`, { method: "POST", body: { pid: me || undefined, ...r } }).catch(() => {});
+}
+mountRoller($("#roller"), { onRoll: postRoll });
 
 function setDockHeight() {
   document.documentElement.style.setProperty("--dockh", $("#dock").offsetHeight + "px");
@@ -38,7 +42,21 @@ function render() {
   const banner = $("#banner");
   banner.classList.toggle("me", !!turn && turn.id === me);
   banner.textContent = !I.on ? "" : turn ? (turn.id === me ? "Your turn" : `Round ${I.round} · ${turn.name}`) : `Round ${I.round}`;
+  renderFeed();
   renderSheet(false);
+}
+
+function renderFeed() {
+  const wrap = $("#feedWrap");
+  if (!feed) { wrap.hidden = true; return; }
+  wrap.hidden = false;
+  $("#feedList").innerHTML = feed.length
+    ? feed.map((r) => `<li class="${r.dm ? "dmroll" : ""}">
+        <span><span class="who">${esc(r.who)}</span><span class="lab">${esc(r.label)}</span></span>
+        <b class="tot ${r.nat === 20 ? "crit" : r.nat === 1 ? "fumble" : ""}">${r.total}</b>
+        <span class="det">${esc(r.detail)}</span>
+      </li>`).join("")
+    : '<li class="empty" style="display:block">No rolls yet.</li>';
 }
 
 const hp = (e) => (e.type === "pc" && e.hp != null ? `${e.hp}${e.maxHp != null ? "/" + e.maxHp : ""} HP` : "");
@@ -140,6 +158,7 @@ $("#sheetBody").addEventListener("click", (e) => {
     const total = d + mod;
     const m = mod ? (mod > 0 ? ` + ${mod}` : ` − ${Math.abs(mod)}`) : "";
     sendInit(total, `You rolled ${d}${m} = ${total}. Sent to the DM.`);
+    postRoll({ label: "Initiative", total, detail: `d20 [${d}]${m}`, nat: d === 20 || d === 1 ? d : null });
   } else if (b.dataset.act === "send") {
     const v = parseInt($("#initIn").value);
     if (!Number.isFinite(v)) { initMsg = "Enter a number first."; renderSheet(true); return; }
@@ -163,9 +182,14 @@ const schedule = () => { clearTimeout(timer); timer = setTimeout(poll, 2000); };
 async function poll() {
   if (document.hidden) { schedule(); return; }
   try {
-    const r = await call(`state/${room}?rev=${rev}`);
+    const r = await call(`state/${room}?rev=${rev}&ft=${ft}`);
     $("#conn").classList.remove("off");
-    if (!r.unchanged) { st = r.state; rev = st.rev; render(); }
+    if (!r.unchanged) {
+      st = r.state; rev = st.rev;
+      feed = r.feed || null;
+      ft = feed && feed.length ? feed[0].t : 0;
+      render();
+    }
   } catch (err) {
     if (err.status === 404) {
       document.body.innerHTML = '<p style="padding:2rem;font-size:1.1rem">This table no longer exists. Check the code with your DM.</p>';

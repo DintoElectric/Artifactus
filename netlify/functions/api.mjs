@@ -12,6 +12,9 @@
 //   DELETE /api/img/CODE/ID       remove a token image           header x-pin
 //   POST   /api/initiative/CODE   a player sends their initiative { id, init }
 //   GET    /api/subs/CODE         DM reads submitted initiatives header x-pin
+//   POST   /api/roll/CODE         add a roll to the feed         { label, total, detail, nat, pid | dm }
+//   GET    /api/feed/CODE         DM reads the whole feed        header x-pin
+//   DELETE /api/feed/CODE         DM clears the feed             header x-pin
 import { getStore } from "@netlify/blobs";
 
 const reply = (data, status = 200) =>
@@ -38,7 +41,8 @@ const blankState = () => ({
   mapH: 0,
   mapOn: false,
   subT: 0,
-  grid: { on: false, size: 60, snap: false },
+  feedOn: false,
+  grid: { on: false, size: 60, snap: false, opacity: 0.3, dark: false, ox: 0, oy: 0, areas: [] },
   fog: { on: false, rev: 0 },
   ents: [],
   inv: { stash: [], dm: [] },
@@ -73,6 +77,25 @@ const KB = 1024;
 const MAX_MAP = 4.6 * KB * KB;
 const MAX_FOG = 600 * KB;
 const MAX_IMG = 400 * KB;
+
+/* Roll feed. Each roll is its own blob whose KEY carries the data, so one list call reads
+   the whole feed and two rolls at the same moment can never overwrite each other. */
+const FEED_MAX = 60;
+const feedPrefix = (room) => `roll/${room}/`;
+const feedKeys = async (store, room) =>
+  (await store.list({ prefix: feedPrefix(room) })).blobs.map((b) => b.key).sort();
+const keyTime = (key, room) => {
+  const n = feedPrefix(room).length;
+  return Number(key.slice(n, n + 13)) || 0;
+};
+function decodeRoll(key, room) {
+  try {
+    const o = JSON.parse(Buffer.from(key.slice(feedPrefix(room).length + 14), "base64url").toString("utf8"));
+    return { ...o, t: keyTime(key, room) };
+  } catch { return null; }
+}
+const readFeed = (keys, room, limit) =>
+  keys.slice(-limit).reverse().map((k) => decodeRoll(k, room)).filter(Boolean);
 
 const imageResponse = (r, fallbackType) =>
   new Response(r.data, {
@@ -123,8 +146,11 @@ export default async (req) => {
       const state = await store.get(`state/${room}`, { type: "json" });
       if (!state) return fail(404, "No table with that code.");
       const rev = url.searchParams.get("rev");
-      if (rev && Number(rev) === state.rev) return reply({ unchanged: true });
-      return reply({ state: publicView(state) });
+      const ft = Number(url.searchParams.get("ft") || 0);
+      const keys = state.feedOn ? await feedKeys(store, room) : null;
+      const latest = keys && keys.length ? keyTime(keys[keys.length - 1], room) : 0;
+      if (rev && Number(rev) === state.rev && (!keys || ft === latest)) return reply({ unchanged: true });
+      return reply({ state: publicView(state), feed: keys ? readFeed(keys, room, 30) : null });
     }
 
     if (route === "state" && req.method === "PUT") {
@@ -181,6 +207,47 @@ export default async (req) => {
       if (!e || e.type !== "pc" || e.hidden) return fail(400, "Pick one of the player characters.");
       await store.setJSON(`sub/${room}/${cleanId(id)}`, { id, init: Math.round(n), t: Date.now() });
       return reply({ ok: true });
+    }
+
+    if (route === "roll" && req.method === "POST") {
+      const b = await req.json().catch(() => ({}));
+      let who = "Player";
+      if (b.dm) {
+        const denied = await dmOnly();
+        if (denied) return denied;
+        who = "DM";
+      } else if (b.pid) {
+        const state = await store.get(`state/${room}`, { type: "json" });
+        const e = state?.ents?.find((x) => x.id === b.pid && x.type === "pc");
+        if (e) who = e.name;
+      }
+      const total = Math.round(Number(b.total));
+      if (!Number.isFinite(total) || Math.abs(total) > 100000) return fail(400, "Bad roll.");
+      const rec = {
+        who: String(who).slice(0, 30),
+        label: String(b.label || "").slice(0, 30),
+        total,
+        detail: String(b.detail || "").slice(0, 120),
+        nat: b.nat === 20 || b.nat === 1 ? b.nat : null,
+        dm: !!b.dm,
+        r: Math.random().toString(36).slice(2, 6),
+      };
+      const key = `${feedPrefix(room)}${String(Date.now()).padStart(13, "0")}-${Buffer.from(JSON.stringify(rec)).toString("base64url")}`;
+      await store.set(key, "1");
+      const keys = await feedKeys(store, room);
+      if (keys.length > FEED_MAX) await Promise.all(keys.slice(0, keys.length - FEED_MAX).map((k) => store.delete(k)));
+      return reply({ ok: true });
+    }
+
+    if (route === "feed" && (req.method === "GET" || req.method === "DELETE")) {
+      const denied = await dmOnly();
+      if (denied) return denied;
+      const keys = await feedKeys(store, room);
+      if (req.method === "DELETE") {
+        await Promise.all(keys.map((k) => store.delete(k)));
+        return reply({ ok: true });
+      }
+      return reply(readFeed(keys, room, FEED_MAX));
     }
 
     if (route === "subs" && req.method === "GET") {

@@ -32,7 +32,26 @@
         <button class="btn small" id="fit" type="button">Fit to screen</button>
         <label class="check"><input type="checkbox" id="gridOn"> Grid</label>
         <label class="check"><input type="checkbox" id="snapOn"> Snap tokens</label>
-        <span class="rng"><label for="gridSize">Square size</label><input type="range" id="gridSize" min="16" max="300" value="60"></span>
+        <span class="rng"><label for="gridSize">Square size</label><input type="range" id="gridSize" min="16" max="300" step="0.5" value="60"></span>
+      </div>
+      <div class="maptools gridbar" id="gridBar" hidden>
+        <span class="rng"><label for="gridOpacity">Dim grid</label><input type="range" id="gridOpacity" min="3" max="100" value="30"></span>
+        <label class="check"><input type="checkbox" id="gridDark"> Dark lines</label>
+        <button class="btn small" id="alignBtn" type="button" aria-pressed="false">Move grid</button>
+        <span class="nudge" role="group" aria-label="Nudge grid">
+          <button class="btn small" type="button" data-nudge="-1,0" aria-label="Nudge grid left">←</button>
+          <button class="btn small" type="button" data-nudge="0,-1" aria-label="Nudge grid up">↑</button>
+          <button class="btn small" type="button" data-nudge="0,1" aria-label="Nudge grid down">↓</button>
+          <button class="btn small" type="button" data-nudge="1,0" aria-label="Nudge grid right">→</button>
+        </span>
+        <button class="btn small ghost" id="resetGridPos" type="button">Reset position</button>
+        <button class="btn small" id="shapeBtn" type="button" aria-pressed="false">Shape grid</button>
+        <span id="shapeCtl" class="row" style="flex:0 1 auto;gap:.4rem" hidden>
+          <button class="btn small" id="closeShape" type="button">Close shape</button>
+          <button class="btn small" id="undoPoint" type="button">Undo point</button>
+          <button class="btn small" id="clearShapes" type="button">Clear shapes</button>
+        </span>
+        <span class="hint" id="gridHint" hidden></span>
       </div>
       <div class="maptools fogbar">
         <label class="check"><input type="checkbox" id="fogOn"> Fog of war</label>
@@ -73,8 +92,17 @@
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>Dice</h2><span>Private to you</span></div>
+      <div class="card-head"><h2>Dice</h2></div>
       <div id="dice"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>Roll feed</h2><span id="feedCount"></span></div>
+      <label class="check" style="margin-bottom:.3rem"><input type="checkbox" id="feedOn"> Players can see the feed</label>
+      <label class="check" style="margin-bottom:.6rem"><input type="checkbox" id="shareDm"> Share my rolls in the feed</label>
+      <p class="hint" style="margin:0 0 .5rem">You always see every player roll.</p>
+      <ol class="feed" id="feedList"></ol>
+      <button class="btn small ghost" id="clearFeed" type="button">Clear feed</button>
     </section>
 
     <section class="card">

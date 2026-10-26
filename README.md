@@ -16,4 +16,5 @@ Existing tables keep working after an update.
 
 ## Notes
 - Fog of war is drawn in the browser. The full map image is still sent to player devices, so a determined player could find it.
-- Dice rolls are private to the device that rolls them. A player's initiative roll is sent to the DM.
+- Every player roll is sent to the DM's roll feed. The DM chooses whether players can see the feed, and whether the DM's own rolls are shared.
+- Grid tools: dim the grid, slide it under the map, and outline shapes so the grid stops at the edges of irregular maps.

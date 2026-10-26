@@ -212,3 +212,21 @@ dialog h2{margin-bottom:1rem}
 .initbox .row{align-items:flex-end}
 .initbox .field{margin:0;flex:1}
 .msg{margin:0;color:var(--mute);font-size:.93rem;min-height:1.2em}
+
+/* ---------- grid tools + roll feed ---------- */
+.mv-shape{position:absolute;left:0;top:0;pointer-events:none;z-index:4;display:none}
+.mv-shape .vtx{pointer-events:all;cursor:grab}
+.mv.aim{cursor:move}
+.nudge{display:inline-flex;gap:.2rem}
+.nudge .btn{padding:0;width:32px}
+.maptools.gridbar{border-top:0}
+.feed li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:0 .6rem;padding:.4rem 0;border-bottom:1px solid var(--line)}
+.feed .who{font-weight:700}
+.feed .lab{color:var(--mute);margin-left:.4rem}
+.feed .det{grid-column:1;color:var(--mute);font-size:.88rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.feed .tot{grid-column:2;grid-row:1/3;align-self:center;font-family:var(--serif);font-size:1.7rem;font-weight:700}
+.feed .tot.crit{color:var(--ok)}
+.feed .tot.fumble{color:var(--bad)}
+.feed .dmroll .who::after{content:" (DM)";font-weight:400;color:var(--mute)}
+.feedbox{margin-top:1rem}
+.feedbox h3{margin-bottom:.3rem}

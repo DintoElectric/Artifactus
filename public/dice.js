@@ -65,8 +65,8 @@ export function rollAdv(mod, mode) {
   };
 }
 
-/* Mounts a dice roller into any element. Rolls are private to the device that makes them. */
-export function mountRoller(root) {
+/* Mounts a dice roller into any element. onRoll receives every result so the page can share it. */
+export function mountRoller(root, opts = {}) {
   root.innerHTML = `
     <div class="dice">
       <div class="dice-btns" role="group" aria-label="Roll one die">
@@ -97,6 +97,7 @@ export function mountRoller(root) {
     history.unshift({ label, total });
     history.length = Math.min(history.length, 8);
     log.innerHTML = history.map((h) => `<li><span>${esc(h.label)}</span><b>${h.total}</b></li>`).join("");
+    opts.onRoll?.({ label, total, detail, nat: nat === 20 || nat === 1 ? nat : null });
   };
   const error = (msg) => { out.innerHTML = `<small class="bad">${esc(msg)}</small>`; };
   const modText = (m) => (m ? (m > 0 ? `+${m}` : `-${Math.abs(m)}`) : "");

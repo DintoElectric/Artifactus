@@ -12,7 +12,8 @@ let selId = null;
 let localMap = null;
 let newType = "pc";
 const localImgs = new Map();
-let paintOn = false, paintTool = "reveal";
+let mode = "none", paintTool = "reveal";   // map tool: none | fog | align | shape
+let shareDm = localStorage.getItem("shareDm:" + room) === "1";
 
 /* ---------- map ---------- */
 const mv = new MapView($("#stage"), {
@@ -33,6 +34,9 @@ const mv = new MapView($("#stage"), {
   onSelect(id) { select(id); },
   onEdit(id) { editToken(id); },
   onFogStroke() { scheduleFogUpload(); },
+  onGridMove() { gridChanged(); },
+  onShapeChange() { gridChanged(); updateShapeButtons(); },
+  onDraftChange() { updateShapeButtons(); },
   imgUrl(e) {
     if (!e.img) return null;
     const l = localImgs.get(e.id);
@@ -127,6 +131,9 @@ function renderMap() {
   $("#fogCtl").hidden = !state.fog.on;
   syncPaint();
   $("#gridOn").checked = !!state.grid.on;
+  $("#gridBar").hidden = !state.grid.on;
+  $("#gridOpacity").value = Math.round((state.grid.opacity ?? 0.3) * 100);
+  $("#gridDark").checked = !!state.grid.dark;
   $("#snapOn").checked = !!state.grid.snap;
   $("#mapOn").checked = !!state.mapOn;
   const sz = $("#gridSize");
@@ -179,24 +186,68 @@ $("#fit").onclick = () => mv.fit();
 $("#mapOn").onchange = (e) => { state.mapOn = e.target.checked; changed(); };
 $("#gridOn").onchange = (e) => { state.grid.on = e.target.checked; changed(); };
 $("#snapOn").onchange = (e) => { state.grid.snap = e.target.checked; bump(); scheduleSave(); renderMap(); };
-$("#gridSize").addEventListener("input", (e) => {
-  state.grid.size = Number(e.target.value);
+function gridChanged() {
   bump(); scheduleSave(300);
   mv.update({ grid: state.grid, ents: state.ents, turnId: state.init.on ? state.init.turnId : null, selId });
+}
+$("#gridSize").addEventListener("input", (e) => { state.grid.size = Number(e.target.value); gridChanged(); });
+$("#gridOpacity").addEventListener("input", (e) => { state.grid.opacity = Number(e.target.value) / 100; gridChanged(); });
+$("#gridDark").onchange = (e) => { state.grid.dark = e.target.checked; gridChanged(); };
+$("#resetGridPos").onclick = () => { state.grid.ox = 0; state.grid.oy = 0; gridChanged(); };
+$("#gridBar").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-nudge]");
+  if (!b) return;
+  const [dx, dy] = b.dataset.nudge.split(",").map(Number);
+  const g = state.grid.size;
+  state.grid.ox = ((((state.grid.ox || 0) + dx * 2) % g) + g) % g;
+  state.grid.oy = ((((state.grid.oy || 0) + dy * 2) % g) + g) % g;
+  gridChanged();
 });
+$("#alignBtn").onclick = () => setMode("align");
+$("#shapeBtn").onclick = () => setMode("shape");
+$("#closeShape").onclick = () => { if (!mv.closeShape()) toast("Place at least 3 corners first."); };
+$("#undoPoint").onclick = () => mv.undoPoint();
+$("#clearShapes").onclick = () => {
+  if (!(state.grid.areas || []).length && !mv.draft.length) return;
+  if (confirm("Remove all grid shapes? The grid will cover the whole map again.")) mv.clearShapes();
+};
 
-/* ---------- fog of war ---------- */
+/* ---------- map tools: only one at a time (fog, move grid, shape grid) ---------- */
+const HINTS = {
+  fog: "Drag on the map to paint. Turn off Paint fog to move tokens or pan.",
+  align: "Drag the map to slide the grid under it, or use the arrows to fine-tune.",
+  shape: "Click to place corners, then Close shape. Drag a corner to adjust it, double-click to delete it. The grid only shows inside shapes.",
+};
+function setMode(m) { mode = mode === m ? "none" : m; syncPaint(); }
+function updateShapeButtons() {
+  $("#closeShape").disabled = mv.draft.length < 3;
+  $("#undoPoint").disabled = !mv.draft.length;
+  $("#clearShapes").disabled = !mv.draft.length && !(state.grid.areas || []).length;
+}
 function syncPaint() {
-  if (!state.fog.on) paintOn = false;
-  mv.paintMode = paintOn ? paintTool : null;
+  if (!state.fog.on && mode === "fog") mode = "none";
+  if (!state.grid.on && (mode === "align" || mode === "shape")) mode = "none";
+  mv.paintMode = mode === "fog" ? paintTool : null;
+  mv.moveGrid = mode === "align";
+  mv.shapeMode = mode === "shape";
   mv.brush = Number($("#brush").value) / 100;
-  mv.root.classList.toggle("paint", paintOn);
-  $("#paintBtn").setAttribute("aria-pressed", paintOn);
-  $("#paintHint").hidden = !paintOn;
+  mv.renderShapes();
+  mv.root.classList.toggle("paint", mode === "fog");
+  mv.root.classList.toggle("aim", mode === "align" || mode === "shape");
+  $("#paintBtn").setAttribute("aria-pressed", mode === "fog");
+  $("#alignBtn").setAttribute("aria-pressed", mode === "align");
+  $("#shapeBtn").setAttribute("aria-pressed", mode === "shape");
+  $("#shapeCtl").hidden = mode !== "shape";
+  const hint = $("#gridHint");
+  hint.hidden = mode !== "align" && mode !== "shape";
+  hint.textContent = HINTS[mode] || "";
+  $("#paintHint").hidden = mode !== "fog";
   $("#fogReveal").setAttribute("aria-pressed", paintTool === "reveal");
   $("#fogHide").setAttribute("aria-pressed", paintTool === "hide");
+  updateShapeButtons();
 }
 
+/* ---------- fog of war ---------- */
 let fogTimer = null;
 function scheduleFogUpload() {
   setSync("Saving fog…");
@@ -218,7 +269,7 @@ async function uploadFog() {
 }
 
 $("#fogOn").onchange = (e) => { state.fog.on = e.target.checked; changed(); };
-$("#paintBtn").onclick = () => { paintOn = !paintOn; syncPaint(); };
+$("#paintBtn").onclick = () => setMode("fog");
 $("#fogReveal").onclick = () => { paintTool = "reveal"; syncPaint(); };
 $("#fogHide").onclick = () => { paintTool = "hide"; syncPaint(); };
 $("#brush").addEventListener("input", syncPaint);
@@ -725,6 +776,41 @@ async function pullSubs() {
   } catch { /* try again on the next tick */ }
 }
 
+/* ---------- roll feed ---------- */
+let feedKey = "";
+async function pullFeed() {
+  if (!state || document.hidden) return;
+  try {
+    const feed = await call(`feed/${room}`, { pin });
+    const key = JSON.stringify(feed.map((r) => r.t + r.r));
+    if (key === feedKey) return;
+    feedKey = key;
+    renderFeed(feed);
+  } catch { /* try again on the next tick */ }
+}
+
+function renderFeed(feed) {
+  $("#feedCount").textContent = feed.length ? `${feed.length} roll${feed.length === 1 ? "" : "s"}` : "";
+  $("#feedList").innerHTML = feed.length
+    ? feed.map((r) => `<li class="${r.dm ? "dmroll" : ""}">
+        <span><span class="who">${esc(r.who)}</span><span class="lab">${esc(r.label)}</span></span>
+        <b class="tot ${r.nat === 20 ? "crit" : r.nat === 1 ? "fumble" : ""}">${r.total}</b>
+        <span class="det">${esc(r.detail)} · ${new Date(r.t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
+      </li>`).join("")
+    : '<li class="empty" style="display:block">Player rolls will show up here.</li>';
+}
+
+$("#feedOn").onchange = (e) => { state.feedOn = e.target.checked; changed(); };
+$("#shareDm").onchange = (e) => {
+  shareDm = e.target.checked;
+  localStorage.setItem("shareDm:" + room, shareDm ? "1" : "0");
+};
+$("#clearFeed").onclick = async () => {
+  if (!confirm("Clear the roll feed for everyone?")) return;
+  try { await call(`feed/${room}`, { method: "DELETE", pin }); feedKey = ""; pullFeed(); }
+  catch (err) { toast("Could not clear the feed: " + err.message); }
+};
+
 /* ---------- header ---------- */
 $("#code").textContent = room;
 $("#copyLink").onclick = async () => {
@@ -746,12 +832,23 @@ $("#leave").onclick = () => {
     state.ents ||= []; state.inv ||= {}; state.init ||= { list: [], turnId: null, round: 1, on: false };
     state.grid ||= { on: false, size: 60, snap: false };
     state.fog ||= { on: false, rev: 0 };
+    state.grid.opacity ??= 0.3;
+    state.grid.ox ||= 0; state.grid.oy ||= 0;
+    state.grid.areas ||= [];
+    state.feedOn ??= false;
     state.inv.stash ||= []; state.inv.dm ||= [];
     renderMap();
     renderSide();
-    mountRoller($("#dice"));
+    mountRoller($("#dice"), {
+      onRoll(r) {
+        if (shareDm) call(`roll/${room}`, { method: "POST", body: { dm: true, ...r }, pin }).catch(() => {});
+      },
+    });
+    $("#feedOn").checked = state.feedOn;
+    $("#shareDm").checked = shareDm;
     pullSubs();
-    setInterval(pullSubs, 3000);
+    pullFeed();
+    setInterval(() => { pullSubs(); pullFeed(); }, 3000);
   } catch (err) {
     if (err.status === 401 || err.status === 404) {
       localStorage.removeItem("dmTable");
