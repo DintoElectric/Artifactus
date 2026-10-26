@@ -18,6 +18,7 @@ Existing tables keep working after an update.
 - Fog of war is drawn in the browser. The full map image is still sent to player devices, so a determined player could find it.
 - Every player roll is sent to the DM's roll feed. The DM chooses whether players can see the feed, and whether the DM's own rolls are shared.
 - Player logins: on the Party tab, "Player login" gives a character a PIN (stored only as a hash). Players pick their character and enter the PIN; the sheet, notes, spells, initiative and roll names then belong to that login. Characters with no PIN stay open to anyone with the table code. Setting a new PIN signs out old devices.
+- Character sheet: players fill in identity, abilities, saves, skills, combat numbers, attacks, features, backstory and coins. Modifiers, proficiency, saves, skills, initiative, passive Perception and spell DC are worked out automatically. Players send HP changes to the DM, whose screen applies them.
 - Player sheets (spell slots, known spells, notes) are saved on the server per character. The DM can edit slots and spells and read the notes.
 - Spell library: the DM imports a CSV, TSV or JSON list (Party tab, "Spell library"). Players search it and add spells to their sheets. To ship a default list with the app, add `public/spells.json` (an array of objects with name, level, school, time, range, comp, dur, classes, desc).
 - Item lists and HP for player characters are still visible to every player at the table.

@@ -2,6 +2,7 @@ import { call, uid, esc, clamp, TYPES, MapView } from "./common.js";
 import { mountRoller } from "./dice.js";
 import { SheetStore, mountBook, mountNotes, blankSheet } from "./sheet.js";
 import { Library, parseSpells } from "./library.js";
+import { mountChar } from "./charsheet.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const saved = JSON.parse(localStorage.getItem("dmTable") || "null");
@@ -774,9 +775,10 @@ function renderParty() {
       const el = document.createElement("section");
       el.className = "pcard";
       el.dataset.pid = pc.id;
-      el.innerHTML = '<div class="pchead"><h2></h2><span class="lock"></span><button class="btn small" data-act="login" type="button">Player login</button></div><div class="book"></div><details class="notesbox"><summary>Player notes</summary><div class="nbody"></div></details>';
+      el.innerHTML = '<div class="pchead"><h2></h2><span class="lock"></span><button class="btn small" data-act="login" type="button">Player login</button></div><div class="book"></div><details class="notesbox"><summary>Character sheet</summary><div class="csheet"></div></details><details class="notesbox"><summary>Player notes</summary><div class="nbody"></div></details>';
       box.appendChild(el);
       mountBook(el.querySelector(".book"), store, { canEdit: true, library });
+      mountChar(el.querySelector(".csheet"), store, {});
       mountNotes(el.querySelector(".nbody"), store, { canEdit: false });
       store.subscribe(() => {
         el.querySelector("summary").textContent = `Player notes (${store.view.notes.length})`;
@@ -1020,11 +1022,17 @@ async function pullSubs() {
     const subs = await call(`subs/${room}`, { pin });
     const seen = state.subT || 0;
     let maxT = seen, applied = 0;
-    for (const sub of subs) {
+    for (const sub of [...subs].sort((a, b) => a.t - b.t)) {
       if (sub.t <= seen) continue;
       maxT = Math.max(maxT, sub.t);
       const e = ent(sub.id);
       if (!e || e.type !== "pc") continue;
+      if (sub.kind === "hp") {
+        e.hp = sub.hp;
+        if (sub.maxHp != null) e.maxHp = sub.maxHp;
+        toast(`${e.name}: HP ${e.hp}${e.maxHp != null ? "/" + e.maxHp : ""}`);
+        continue;
+      }
       addToInit(sub.id);
       state.init.list.find((i) => i.id === sub.id).init = sub.init;
       applied++;

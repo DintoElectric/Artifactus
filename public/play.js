@@ -1,6 +1,7 @@
 import { call, esc, TYPES, MapView } from "./common.js";
 import { mountRoller, rand } from "./dice.js";
 import { SheetStore, mountBook, mountNotes } from "./sheet.js";
+import { mountChar } from "./charsheet.js";
 import { Library } from "./library.js";
 
 const $ = (s) => document.querySelector(s);
@@ -10,8 +11,8 @@ if (!room) { location.replace("/"); throw new Error("No table"); }
 $("#pcode").textContent = room;
 
 const EMPTY_MAP = "Waiting for the DM to show the map…";
-const TITLES = { init: "Initiative", goals: "Goals", inv: "Items", spells: "Spells", notes: "Notes", dice: "Dice" };
-const PANES = { init: "sheetBody", goals: "sheetBody", inv: "sheetBody", spells: "spellBody", notes: "noteBody", dice: "diceBody" };
+const TITLES = { init: "Initiative", goals: "Goals", inv: "Items", char: "Character sheet", spells: "Spells", notes: "Notes", dice: "Dice" };
+const PANES = { init: "sheetBody", goals: "sheetBody", inv: "sheetBody", char: "charBody", spells: "spellBody", notes: "noteBody", dice: "diceBody" };
 
 let st = null, rev = "", ft = 0, feed = null, sheet = null, sheetKey = "", initMsg = "";
 let mod = parseInt(localStorage.getItem("mod:" + room)) || 0;
@@ -158,6 +159,7 @@ function render() {
   banner.textContent = !I.on ? "" : turn ? (turn.id === me ? "Your turn" : `Round ${I.round} · ${turn.name}`) : `Round ${I.round}`;
   renderFeed();
   renderSheet(false);
+  charUI?.refresh();
 }
 
 function renderFeed() {
@@ -185,10 +187,38 @@ function itemList(items) {
 
 /* Spells and notes live in a per-character sheet saved on the server. */
 const library = new Library(room);
-let store = null, storePid = "";
+let store = null, storePid = "", charUI = null, pendingHp = null;
+
+/* HP lives on the DM's token. A change is sent to the DM, who applies it; until the new value
+   comes back we show what the player just entered. */
+const hpOpts = {
+  get() {
+    const e = st?.ents.find((x) => x.id === me);
+    let hp = e?.hp ?? null, maxHp = e?.maxHp ?? null;
+    if (pendingHp) {
+      const done = e && e.hp === pendingHp.hp && (pendingHp.maxHp == null || e.maxHp === pendingHp.maxHp);
+      if (done || Date.now() - pendingHp.t > 12000) pendingHp = null;
+      else { hp = pendingHp.hp; if (pendingHp.maxHp != null) maxHp = pendingHp.maxHp; }
+    }
+    return { hp, maxHp, pending: !!pendingHp };
+  },
+  async set(hp, maxHp) {
+    pendingHp = { hp, maxHp, t: Date.now() };
+    try {
+      await call(`hp/${room}`, { method: "POST", body: { id: me, hp, maxHp }, ...auth() });
+      return "Sent to your DM.";
+    } catch (err) {
+      pendingHp = null;
+      if (err.status === 401) { logout("Your login changed, so please sign in again."); return ""; }
+      return err.message;
+    }
+  },
+};
+
 function bindStore() {
   if (!me) {
-    store = null; storePid = "";
+    store = null; storePid = ""; charUI = null;
+    $("#charBody").innerHTML = loginPrompt("fill in your character sheet");
     $("#spellBody").innerHTML = loginPrompt("track your spells");
     $("#noteBody").innerHTML = loginPrompt("keep notes");
     return;
@@ -197,18 +227,23 @@ function bindStore() {
   storePid = me;
   store = new SheetStore(room, me, auth());
   store.subscribe(() => { if (store.status === "auth") logout("Your login changed, so please sign in again."); });
-  for (const [sel, mount] of [["#spellBody", mountBook], ["#noteBody", mountNotes]]) {
+  for (const [sel, mount, opts] of [
+    ["#charBody", mountChar, { hp: hpOpts }],
+    ["#spellBody", mountBook, { canEdit: true, library }],
+    ["#noteBody", mountNotes, { canEdit: true }],
+  ]) {
     const host = $(sel);
     host.innerHTML = "";
     const inner = document.createElement("div");
     host.appendChild(inner);
-    mount(inner, store, { canEdit: true, library });
+    const api = mount(inner, store, opts);
+    if (mount === mountChar) charUI = api;
   }
   store.load();
   library.load();
 }
 setInterval(() => {
-  if (!document.hidden && store && (sheet === "spells" || sheet === "notes")) store.load();
+  if (!document.hidden && store && ["char", "spells", "notes"].includes(sheet)) store.load();
 }, 5000);
 
 function renderSheet(force) {
@@ -217,10 +252,11 @@ function renderSheet(force) {
   if (!sheet) { box.hidden = true; return; }
   box.hidden = false;
   $("#sheetTitle").textContent = TITLES[sheet];
-  for (const id of ["sheetBody", "spellBody", "noteBody", "diceBody"]) $("#" + id).hidden = id !== PANES[sheet];
+  for (const id of ["sheetBody", "charBody", "spellBody", "noteBody", "diceBody"]) $("#" + id).hidden = id !== PANES[sheet];
+  box.classList.toggle("tall", ["char", "spells", "notes"].includes(sheet));
   if (!st) return;
   if (sheet === "dice") return;
-  if (sheet === "spells" || sheet === "notes") { bindStore(); return; }
+  if (sheet === "char" || sheet === "spells" || sheet === "notes") { bindStore(); return; }
 
   const pcs = st.ents.filter((e) => e.type === "pc");
   const key = sheet + JSON.stringify(

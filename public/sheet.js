@@ -1,11 +1,12 @@
 import { call, esc, uid } from "./common.js";
+import { blankChar } from "./charsheet.js";
 
 /* A character sheet holds notes, spell slots and known spells.
    SheetStore keeps a server copy (base) plus a queue of edits (ops). The screen shows base + ops,
    so taps feel instant. If someone else saved first, the edits are replayed on top of their copy. */
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
-export const blankSheet = () => ({ rev: 0, notes: [], slots: {}, spells: [] });
+export const blankSheet = () => ({ rev: 0, notes: [], slots: {}, spells: [], char: blankChar() });
 
 export class SheetStore {
   constructor(room, pid, auth = {}) {

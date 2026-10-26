@@ -18,6 +18,7 @@
 //   GET    /api/sheet/CODE/PID    a player's notes, spell slots and spells
 //   PUT    /api/sheet/CODE/PID    save them (compare-and-set on rev) { rev, sheet }
 //   GET    /api/sheets/CODE       DM reads every player's sheet  header x-pin
+//   POST   /api/hp/CODE           a player sends an HP change to the DM  { id, hp, maxHp }
 //   POST   /api/playerlogin/CODE  player logs into a character   { pid, pin } -> { token }
 //   GET    /api/logins/CODE       DM: which characters have a PIN  header x-pin
 //   PUT    /api/logins/CODE/PID   DM sets a character's PIN      { pin }
@@ -132,7 +133,46 @@ const cleanLib = (list) =>
 
 /* Player sheets: notes, spell slots and known spells. One blob per character, saved with a
    revision check so the DM and the player can both edit without overwriting each other. */
-const blankSheet = () => ({ rev: 0, notes: [], slots: {}, spells: [] });
+const ABIL = ["str", "dex", "con", "int", "wis", "cha"];
+const SKILL_KEYS = ["acrobatics", "animal", "arcana", "athletics", "deception", "history", "insight", "intimidation", "investigation",
+  "medicine", "nature", "perception", "performance", "persuasion", "religion", "sleight", "stealth", "survival"];
+const num = (v, lo, hi, def) => { const n = Math.round(Number(v)); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : def; };
+const rid = () => Math.random().toString(36).slice(2, 9);
+
+/* The character sheet proper: identity, abilities, saves, skills, combat numbers, attacks, text. */
+function cleanChar(c) {
+  c = c && typeof c === "object" ? c : {};
+  const info = c.info || {}, ab = c.abilities || {}, sv = c.saves || {}, sk = c.skills || {};
+  const cb = c.combat || {}, tx = c.text || {}, co = c.coins || {};
+  const abilities = {}, saves = {};
+  for (const k of ABIL) { abilities[k] = num(ab[k], 1, 30, 10); saves[k] = !!sv[k]; }
+  const skills = {};
+  for (const k of SKILL_KEYS) { const v = num(sk[k], 0, 2, 0); if (v) skills[k] = v; }
+  return {
+    info: {
+      class: str(info.class, 40), race: str(info.race, 40), background: str(info.background, 40),
+      alignment: str(info.alignment, 40), player: str(info.player, 40), xp: str(info.xp, 20), level: num(info.level, 1, 20, 1),
+    },
+    abilities, saves, skills,
+    combat: {
+      ac: num(cb.ac, 0, 40, 10), speed: cb.speed === undefined ? "30 ft" : str(cb.speed, 30), initMisc: num(cb.initMisc, -10, 20, 0),
+      hitDice: str(cb.hitDice, 30), deathS: num(cb.deathS, 0, 3, 0), deathF: num(cb.deathF, 0, 3, 0),
+      inspiration: !!cb.inspiration, tempHp: num(cb.tempHp, 0, 999, 0),
+    },
+    cast: ABIL.includes(c.cast) ? c.cast : "",
+    attacks: (Array.isArray(c.attacks) ? c.attacks : []).slice(0, 12)
+      .map((a) => ({ id: cleanId(a?.id) || rid(), name: str(a?.name, 40), bonus: str(a?.bonus, 10), damage: str(a?.damage, 40) })),
+    text: {
+      features: str(tx.features, 3000), profs: str(tx.profs, 1500), traits: str(tx.traits, 600), ideals: str(tx.ideals, 600),
+      bonds: str(tx.bonds, 600), flaws: str(tx.flaws, 600), backstory: str(tx.backstory, 4000),
+    },
+    coins: { cp: num(co.cp, 0, 9999999, 0), sp: num(co.sp, 0, 9999999, 0), ep: num(co.ep, 0, 9999999, 0), gp: num(co.gp, 0, 9999999, 0), pp: num(co.pp, 0, 9999999, 0) },
+  };
+}
+
+const blankSheet = () => ({ rev: 0, notes: [], slots: {}, spells: [], char: cleanChar({}) });
+// Sheets saved before the character sheet existed get filled in with defaults when read.
+const readSheet = (raw) => (raw ? { ...cleanSheet(raw), rev: raw.rev || 0 } : blankSheet());
 const str = (v, n) => String(v ?? "").slice(0, n);
 const int = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(Number(v)) || 0));
 function cleanSheet(s) {
@@ -148,7 +188,7 @@ function cleanSheet(s) {
   const spells = (Array.isArray(s.spells) ? s.spells : []).slice(0, 200)
     .map((p) => ({ id: id(p?.id), name: str(p?.name, 60).trim(), level: int(p?.level, 0, 9), note: str(p?.note, 160), prepared: !!p?.prepared }))
     .filter((p) => p.name);
-  return { notes, slots, spells };
+  return { notes, slots, spells, char: cleanChar(s.char) };
 }
 
 const imageResponse = (r, fallbackType) =>
@@ -319,10 +359,10 @@ export default async (req) => {
       if (!pid) return fail(400, "Missing character id.");
       if (!(await mayActAs(pid))) return needLogin();
       const key = `sheet/${room}/${pid}`;
-      const cur = (await store.get(key, { type: "json" })) || blankSheet();
+      const cur = readSheet(await store.get(key, { type: "json" }));
       if (req.method === "GET") return reply({ sheet: cur });
       const text = await req.text();
-      if (text.length > 250000) return fail(413, "That sheet is too large.");
+      if (text.length > 400000) return fail(413, "That sheet is too large.");
       let body;
       try { body = JSON.parse(text); } catch { return fail(400, "Bad data."); }
       const state = await store.get(`state/${room}`, { type: "json" });
@@ -339,7 +379,7 @@ export default async (req) => {
       const prefix = `sheet/${room}/`;
       const { blobs } = await store.list({ prefix });
       const sheets = {};
-      await Promise.all(blobs.map(async (b) => { sheets[b.key.slice(prefix.length)] = await store.get(b.key, { type: "json" }); }));
+      await Promise.all(blobs.map(async (b) => { sheets[b.key.slice(prefix.length)] = readSheet(await store.get(b.key, { type: "json" })); }));
       return reply({ sheets });
     }
 
@@ -404,12 +444,29 @@ export default async (req) => {
       return reply({ ok: true, count: spells.length });
     }
 
+    // A player changes their own HP; the DM's screen applies it to the token.
+    if (route === "hp" && req.method === "POST") {
+      const { id, hp, maxHp } = await req.json().catch(() => ({}));
+      const state = await store.get(`state/${room}`, { type: "json" });
+      const e = state?.ents?.find((x) => x.id === id && x.type === "pc");
+      if (!e) return fail(400, "Pick one of the player characters.");
+      if (!(await mayActAs(e.id))) return needLogin();
+      const rec = { id: e.id, hp: num(hp, 0, 9999, 0), t: Date.now() };
+      if (maxHp !== undefined && maxHp !== null) rec.maxHp = num(maxHp, 1, 9999, 1);
+      await store.setJSON(`pcu/${room}/${cleanId(e.id)}`, rec);
+      return reply({ ok: true });
+    }
+
     if (route === "subs" && req.method === "GET") {
       const denied = await dmOnly();
       if (denied) return denied;
-      const { blobs } = await store.list({ prefix: `sub/${room}/` });
-      const subs = await Promise.all(blobs.map((b) => store.get(b.key, { type: "json" })));
-      return reply(subs.filter(Boolean));
+      const read = async (prefix, kind) => {
+        const { blobs } = await store.list({ prefix });
+        const items = await Promise.all(blobs.map((b) => store.get(b.key, { type: "json" })));
+        return items.filter(Boolean).map((x) => ({ ...x, kind }));
+      };
+      const [inits, hps] = await Promise.all([read(`sub/${room}/`, "init"), read(`pcu/${room}/`, "hp")]);
+      return reply([...inits, ...hps]);
     }
 
     return fail(404, "Not found.");
