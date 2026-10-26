@@ -18,6 +18,8 @@
     <nav class="tabs" role="tablist" aria-label="Views">
       <button role="tab" id="tabMap" aria-selected="true">Map</button>
       <button role="tab" id="tabInv" aria-selected="false">Inventory</button>
+      <button role="tab" id="tabParty" aria-selected="false">Party</button>
+      <button role="tab" id="tabObj" aria-selected="false">Objectives</button>
     </nav>
     <span class="grow"></span>
     <label class="check"><input type="checkbox" id="mapOn"> Map visible to players</label>
@@ -72,6 +74,18 @@
     </section>
     <section class="pane" id="paneInv" hidden>
       <div class="board" id="board"></div>
+    </section>
+    <section class="pane" id="paneParty" hidden>
+      <div class="party" id="party"></div>
+    </section>
+    <section class="pane" id="paneObj" hidden>
+      <div class="objwrap">
+        <div class="objbar">
+          <button class="btn primary" id="addObj" type="button">Add objective</button>
+          <span class="hint">Hidden objectives are only visible to you. Players see the rest under Goals.</span>
+        </div>
+        <div id="objList"></div>
+      </div>
     </section>
   </main>
 

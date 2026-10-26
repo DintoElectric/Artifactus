@@ -15,6 +15,9 @@
 //   POST   /api/roll/CODE         add a roll to the feed         { label, total, detail, nat, pid | dm }
 //   GET    /api/feed/CODE         DM reads the whole feed        header x-pin
 //   DELETE /api/feed/CODE         DM clears the feed             header x-pin
+//   GET    /api/sheet/CODE/PID    a player's notes, spell slots and spells
+//   PUT    /api/sheet/CODE/PID    save them (compare-and-set on rev) { rev, sheet }
+//   GET    /api/sheets/CODE       DM reads every player's sheet  header x-pin
 import { getStore } from "@netlify/blobs";
 
 const reply = (data, status = 200) =>
@@ -42,6 +45,7 @@ const blankState = () => ({
   mapOn: false,
   subT: 0,
   feedOn: false,
+  objectives: [],
   grid: { on: false, size: 60, snap: false, opacity: 0.3, dark: false, ox: 0, oy: 0, areas: [] },
   fog: { on: false, rev: 0 },
   ents: [],
@@ -65,6 +69,7 @@ function publicView(s) {
     ...s,
     ents,
     inv,
+    objectives: (s.objectives || []).filter((o) => !o.hidden),
     init: {
       ...init,
       list: (init.list || []).filter((i) => visible.has(i.id)),
@@ -96,6 +101,27 @@ function decodeRoll(key, room) {
 }
 const readFeed = (keys, room, limit) =>
   keys.slice(-limit).reverse().map((k) => decodeRoll(k, room)).filter(Boolean);
+
+/* Player sheets: notes, spell slots and known spells. One blob per character, saved with a
+   revision check so the DM and the player can both edit without overwriting each other. */
+const blankSheet = () => ({ rev: 0, notes: [], slots: {}, spells: [] });
+const str = (v, n) => String(v ?? "").slice(0, n);
+const int = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(Number(v)) || 0));
+function cleanSheet(s) {
+  const id = (v) => cleanId(v) || Math.random().toString(36).slice(2, 9);
+  const notes = (Array.isArray(s.notes) ? s.notes : []).slice(0, 30)
+    .map((n) => ({ id: id(n?.id), title: str(n?.title, 80), body: str(n?.body, 6000) }));
+  const slots = {};
+  for (let l = 1; l <= 9; l++) {
+    const x = s.slots?.[l];
+    const max = int(x?.max, 0, 20);
+    if (max > 0) slots[l] = { max, used: int(x?.used, 0, max) };
+  }
+  const spells = (Array.isArray(s.spells) ? s.spells : []).slice(0, 200)
+    .map((p) => ({ id: id(p?.id), name: str(p?.name, 60).trim(), level: int(p?.level, 0, 9), note: str(p?.note, 160), prepared: !!p?.prepared }))
+    .filter((p) => p.name);
+  return { notes, slots, spells };
+}
 
 const imageResponse = (r, fallbackType) =>
   new Response(r.data, {
@@ -248,6 +274,34 @@ export default async (req) => {
         return reply({ ok: true });
       }
       return reply(readFeed(keys, room, FEED_MAX));
+    }
+
+    if (route === "sheet" && (req.method === "GET" || req.method === "PUT")) {
+      const pid = cleanId(rawId);
+      if (!pid) return fail(400, "Missing character id.");
+      const key = `sheet/${room}/${pid}`;
+      const cur = (await store.get(key, { type: "json" })) || blankSheet();
+      if (req.method === "GET") return reply({ sheet: cur });
+      const text = await req.text();
+      if (text.length > 250000) return fail(413, "That sheet is too large.");
+      let body;
+      try { body = JSON.parse(text); } catch { return fail(400, "Bad data."); }
+      const state = await store.get(`state/${room}`, { type: "json" });
+      if (!state?.ents?.some((x) => x.id === pid && x.type === "pc")) return fail(400, "Pick one of the player characters.");
+      if (Number(body.rev || 0) !== (cur.rev || 0)) return reply({ error: "Changed elsewhere.", current: cur }, 409);
+      const out = { ...cleanSheet(body.sheet || {}), rev: (cur.rev || 0) + 1 };
+      await store.setJSON(key, out);
+      return reply({ sheet: out });
+    }
+
+    if (route === "sheets" && req.method === "GET") {
+      const denied = await dmOnly();
+      if (denied) return denied;
+      const prefix = `sheet/${room}/`;
+      const { blobs } = await store.list({ prefix });
+      const sheets = {};
+      await Promise.all(blobs.map(async (b) => { sheets[b.key.slice(prefix.length)] = await store.get(b.key, { type: "json" }); }));
+      return reply({ sheets });
     }
 
     if (route === "subs" && req.method === "GET") {

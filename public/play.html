@@ -19,7 +19,10 @@
   <div id="map"></div>
   <section class="sheet" id="sheet" hidden aria-live="polite">
     <div class="sheet-head"><h2 id="sheetTitle"></h2><button class="btn small" id="sheetClose" type="button">Close</button></div>
+    <div id="meBar" hidden></div>
     <div id="sheetBody"></div>
+    <div id="spellBody" hidden></div>
+    <div id="noteBody" hidden></div>
     <div id="diceBody" hidden>
       <div id="roller"></div>
       <div class="feedbox" id="feedWrap" hidden>
@@ -28,9 +31,12 @@
       </div>
     </div>
   </section>
-  <nav class="dock" id="dock">
+  <nav class="dock" id="dock" aria-label="Panels">
     <button class="btn" data-sheet="init" type="button">Initiative</button>
-    <button class="btn" data-sheet="inv" type="button">Inventory</button>
+    <button class="btn" data-sheet="goals" type="button">Goals</button>
+    <button class="btn" data-sheet="inv" type="button">Items</button>
+    <button class="btn" data-sheet="spells" type="button">Spells</button>
+    <button class="btn" data-sheet="notes" type="button">Notes</button>
     <button class="btn" data-sheet="dice" type="button">Dice</button>
     <button class="btn" id="fitBtn" type="button">Fit map</button>
   </nav>

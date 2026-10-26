@@ -230,3 +230,69 @@ dialog h2{margin-bottom:1rem}
 .feed .dmroll .who::after{content:" (DM)";font-weight:400;color:var(--mute)}
 .feedbox{margin-top:1rem}
 .feedbox h3{margin-bottom:.3rem}
+
+/* ---------- player dock + me bar ---------- */
+.dock{overflow-x:auto;scrollbar-width:thin}
+.dock .btn{flex:0 0 auto;min-width:4.7rem;padding-inline:.7rem}
+#meBar .field{margin-bottom:.6rem}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* ---------- spell slots + spells ---------- */
+.bookhead{display:flex;align-items:baseline;justify-content:space-between;gap:.6rem;margin-bottom:.4rem}
+.bookhead .sync{min-width:0}
+.slotrow{display:flex;align-items:center;gap:.6rem;padding:.3rem 0;border-bottom:1px solid var(--line)}
+.slotrow .lv{width:2.6rem;color:var(--mute);flex:none}
+.slotrow .pips{flex:1;display:flex;flex-wrap:wrap;gap:.35rem}
+.slotrow .left{color:var(--mute);font-variant-numeric:tabular-nums}
+.maxctl{display:flex;gap:.25rem}
+.maxctl .btn{width:34px;padding:0}
+.pip{width:26px;height:26px;border-radius:50%;padding:0;border:2px solid var(--brass);background:var(--brass);
+  box-shadow:inset 0 -3px 0 rgba(0,0,0,.2)}
+.pip.used{background:transparent;box-shadow:none;border-color:var(--line)}
+.pip:disabled{cursor:default}
+.splevel{margin:.9rem 0 .25rem;font-family:var(--serif);font-size:1.05rem;color:var(--mute)}
+.spells li{display:flex;align-items:center;gap:.5rem;padding:.35rem 0;border-bottom:1px solid var(--line)}
+.spell .sinfo{flex:1;min-width:0;display:grid}
+.sname{background:none;border:0;padding:0;text-align:left;font-weight:700}
+.sname:disabled{color:var(--text)}
+.sinfo small{color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.spellform{display:grid;gap:.4rem;padding:.5rem;background:#1a2030;border-radius:10px;margin:.4rem 0}
+.spellform .row>*{flex:1 1 0;min-width:0}
+.spellform .row>.btn{flex:none}
+
+/* ---------- notes ---------- */
+.note{display:grid;gap:.4rem;padding:.6rem;margin-bottom:.6rem;background:#1a2030;border:1px solid var(--line);border-radius:10px}
+.note .ntitle{font-weight:700}
+.note textarea{resize:vertical;min-height:5rem}
+.note.ro h4{margin:0}
+.note.ro p{margin:.2rem 0 0;white-space:pre-wrap;color:var(--text)}
+.note .btn{justify-self:start}
+
+/* ---------- objectives ---------- */
+.objwrap{flex:1;min-height:0;overflow:auto;padding:.8rem;display:grid;gap:.8rem;align-content:start}
+.objbar{display:flex;gap:.8rem;align-items:center;flex-wrap:wrap}
+#objList{display:grid;gap:.7rem;max-width:760px}
+.obj{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--brass);border-radius:10px;padding:.7rem .85rem;margin-bottom:.5rem}
+.obj.done{border-left-color:var(--ok)}
+.obj.failed{border-left-color:var(--bad)}
+.obj.hid{border-style:dashed;border-left-style:solid}
+.obj header{display:flex;justify-content:space-between;align-items:baseline;gap:.6rem}
+.obj h3,.obj h4{margin:0;font-family:var(--serif);font-size:1.2rem}
+.obj .pill{color:var(--mute);font-size:.88rem;white-space:nowrap}
+.obj .onote{margin:.35rem 0 .1rem;color:var(--mute);white-space:pre-wrap}
+.obj .steps{margin:.45rem 0 .2rem;display:grid;gap:.2rem}
+.obj .steps .done,.obj .steps li.done{color:var(--mute);text-decoration:line-through}
+.obj .steps li{display:flex;gap:.5rem}
+.obj .oact{display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;margin-top:.6rem}
+.obj .oact select{width:auto;min-height:32px;padding:.1rem .5rem}
+.goalhead{margin:1rem 0 .4rem;font-family:var(--serif);color:var(--mute)}
+.goalhead:first-child{margin-top:0}
+.sheet .obj{background:#1a2030}
+
+/* ---------- party tab ---------- */
+.party{flex:1;min-height:0;overflow:auto;padding:.8rem;display:grid;gap:.8rem;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));align-content:start}
+.pcard{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:.8rem}
+.pcard h2{margin-bottom:.5rem}
+.notesbox{margin-top:.9rem}
+.notesbox summary{cursor:pointer;color:var(--mute);padding:.3rem 0}
+.notesbox .note{margin-top:.4rem}

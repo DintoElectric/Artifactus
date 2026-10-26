@@ -29,10 +29,11 @@ export async function call(path, { method = "GET", body, pin } = {}) {
   }
   const res = await fetch("/api/" + path, { method, headers, body: payload, cache: "no-store" });
   if (!res.ok) {
-    let msg = "";
-    try { msg = (await res.json()).error; } catch { /* ignore */ }
+    let msg = "", data = null;
+    try { data = await res.json(); msg = data.error; } catch { /* ignore */ }
     const err = new Error(msg || res.statusText || "Request failed");
     err.status = res.status;
+    err.data = data;
     throw err;
   }
   return res.json();

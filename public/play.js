@@ -1,5 +1,6 @@
 import { call, esc, TYPES, MapView } from "./common.js";
 import { mountRoller, rand } from "./dice.js";
+import { SheetStore, mountBook, mountNotes } from "./sheet.js";
 
 const $ = (s) => document.querySelector(s);
 const room = (new URLSearchParams(location.search).get("room") || "").toUpperCase();
@@ -7,7 +8,11 @@ if (!room) { location.replace("/"); throw new Error("No table"); }
 $("#pcode").textContent = room;
 
 const EMPTY_MAP = "Waiting for the DM to show the map…";
-let st = null, rev = "", ft = 0, feed = null, sheet = null, sheetKey = "", initMsg = "";
+const TITLES = { init: "Initiative", goals: "Goals", inv: "Items", spells: "Spells", notes: "Notes", dice: "Dice" };
+const PANES = { init: "sheetBody", goals: "sheetBody", inv: "sheetBody", spells: "spellBody", notes: "noteBody", dice: "diceBody" };
+const NEEDS_ME = new Set(["init", "inv", "spells", "notes"]);
+
+let st = null, rev = "", ft = 0, feed = null, sheet = null, sheetKey = "", barKey = "", initMsg = "";
 let me = localStorage.getItem("me:" + room) || "";
 let mod = parseInt(localStorage.getItem("mod:" + room)) || 0;
 
@@ -16,6 +21,7 @@ const mv = new MapView($("#map"), {
   emptyText: EMPTY_MAP,
   imgUrl: (e) => (e.img ? `/api/img/${room}/${e.id}?v=${e.img}` : null),
 });
+
 // Every roll goes to the DM; the DM decides whether the other players see the feed.
 function postRoll(r) {
   call(`roll/${room}`, { method: "POST", body: { pid: me || undefined, ...r } }).catch(() => {});
@@ -28,7 +34,7 @@ function setDockHeight() {
 setDockHeight();
 window.addEventListener("resize", setDockHeight);
 
-/* ---------- render ---------- */
+/* ---------- map, banner, feed ---------- */
 function render() {
   const I = st.init;
   const showMap = st.mapOn && st.mapRev;
@@ -59,6 +65,7 @@ function renderFeed() {
     : '<li class="empty" style="display:block">No rolls yet.</li>';
 }
 
+/* ---------- sheet panels ---------- */
 const hp = (e) => (e.type === "pc" && e.hp != null ? `${e.hp}${e.maxHp != null ? "/" + e.maxHp : ""} HP` : "");
 
 function itemList(items) {
@@ -67,25 +74,63 @@ function itemList(items) {
     `<li><span><b>${esc(it.name)}</b>${it.note ? `<small>${esc(it.note)}</small>` : ""}</span><span>×${it.qty}</span></li>`).join("")}</ul>`;
 }
 
-const meSelect = (pcs) => `
-  <div class="field"><label for="meSel">Your character</label>
+function renderMeBar() {
+  const bar = $("#meBar");
+  bar.hidden = !(sheet && NEEDS_ME.has(sheet));
+  if (bar.hidden || !st) return;
+  const pcs = st.ents.filter((e) => e.type === "pc");
+  if (me && !pcs.some((p) => p.id === me)) me = "";
+  const key = JSON.stringify([pcs.map((p) => [p.id, p.name]), me]);
+  if (key === barKey) return;
+  if (bar.contains(document.activeElement)) return;
+  barKey = key;
+  bar.innerHTML = `<div class="field"><label for="meSel">Your character</label>
     <select id="meSel"><option value="">Choose…</option>${pcs.map((p) =>
       `<option value="${p.id}" ${p.id === me ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></div>`;
+}
+
+/* Spells and notes live in a per-character sheet saved on the server. */
+let store = null, storePid = "";
+function bindStore() {
+  if (!me) {
+    store = null; storePid = "";
+    const msg = '<p class="empty">Choose your character above.</p>';
+    $("#spellBody").innerHTML = msg;
+    $("#noteBody").innerHTML = msg;
+    return;
+  }
+  if (storePid === me) return;
+  storePid = me;
+  store = new SheetStore(room, me);
+  for (const [sel, mount] of [["#spellBody", mountBook], ["#noteBody", mountNotes]]) {
+    const host = $(sel);
+    host.innerHTML = "";
+    const inner = document.createElement("div");
+    host.appendChild(inner);
+    mount(inner, store, { canEdit: true });
+  }
+  store.load();
+}
+setInterval(() => {
+  if (!document.hidden && store && (sheet === "spells" || sheet === "notes")) store.load();
+}, 5000);
 
 function renderSheet(force) {
   const box = $("#sheet");
   document.querySelectorAll("[data-sheet]").forEach((b) => b.setAttribute("aria-pressed", b.dataset.sheet === sheet));
   if (!sheet) { box.hidden = true; return; }
   box.hidden = false;
-  $("#sheetTitle").textContent = { init: "Initiative", inv: "Inventory", dice: "Dice" }[sheet];
-  $("#diceBody").hidden = sheet !== "dice";
-  $("#sheetBody").hidden = sheet === "dice";
+  $("#sheetTitle").textContent = TITLES[sheet];
+  for (const id of ["sheetBody", "spellBody", "noteBody", "diceBody"]) $("#" + id).hidden = id !== PANES[sheet];
+  if (!st) return;
+  renderMeBar();
   if (sheet === "dice") return;
+  if (sheet === "spells" || sheet === "notes") { bindStore(); return; }
 
   const pcs = st.ents.filter((e) => e.type === "pc");
-  if (me && !pcs.some((p) => p.id === me)) me = "";
-  const key = sheet + JSON.stringify(sheet === "init"
-    ? [st.init, st.ents.map((e) => [e.id, e.name, e.hp, e.maxHp, e.down]), me, initMsg]
+  const key = sheet + JSON.stringify(
+    sheet === "init" ? [st.init, st.ents.map((e) => [e.id, e.name, e.hp, e.maxHp, e.down]), me, initMsg]
+    : sheet === "goals" ? st.objectives || []
     : [st.inv, pcs.map((p) => [p.id, p.name]), me]);
   if (!force && key === sheetKey) return;
   // Don't wipe what the player is typing.
@@ -93,6 +138,7 @@ function renderSheet(force) {
   if (!force && $("#sheetBody").contains(active) && active.matches("input,select")) return;
   sheetKey = key;
 
+  const body = $("#sheetBody");
   if (sheet === "init") {
     const I = st.init;
     const byId = new Map(st.ents.map((e) => [e.id, e]));
@@ -117,10 +163,24 @@ function renderSheet(force) {
           <p class="msg" role="status">${esc(initMsg || (mine?.init != null ? `Your initiative: ${mine.init}` : ""))}</p>
         </div>`
       : '<p class="empty">Choose your character to send your initiative.</p>';
-    $("#sheetBody").innerHTML = meSelect(pcs) + send +
+    body.innerHTML = send +
       (rows ? (I.on ? "" : '<p class="empty">Combat hasn\'t started yet.</p>') + `<ol>${rows}</ol>` : '<p class="empty">No combat right now.</p>');
+  } else if (sheet === "goals") {
+    const objs = st.objectives || [];
+    const group = (status, label) => {
+      const list = objs.filter((o) => o.status === status);
+      if (!list.length) return "";
+      return `<h3 class="goalhead">${label}</h3>${list.map((o) => `
+        <article class="obj ${o.status}">
+          <h4>${esc(o.title)}</h4>
+          ${o.note ? `<p class="onote">${esc(o.note)}</p>` : ""}
+          ${o.steps.length ? `<ul class="steps">${o.steps.map((s) => `<li class="${s.done ? "done" : ""}"><span aria-hidden="true">${s.done ? "✓" : "○"}</span> ${esc(s.text)}<span class="sr"> (${s.done ? "done" : "not done"})</span></li>`).join("")}</ul>` : ""}
+        </article>`).join("")}`;
+    };
+    body.innerHTML = objs.length ? group("active", "Active") + group("done", "Completed") + group("failed", "Failed")
+      : '<p class="empty">Your DM hasn\'t shared any goals yet.</p>';
   } else {
-    $("#sheetBody").innerHTML = meSelect(pcs) + (me ? itemList(st.inv[me]) : "") +
+    body.innerHTML = (me ? itemList(st.inv[me]) : '<p class="empty">Choose your character to see your items.</p>') +
       `<p class="plabel">Party stash</p>` + itemList(st.inv.stash);
   }
 }
@@ -135,14 +195,14 @@ async function sendInit(value, note) {
   renderSheet(true);
 }
 
-$("#sheetBody").addEventListener("change", (e) => {
-  if (e.target.id === "meSel") {
-    me = e.target.value;
-    localStorage.setItem("me:" + room, me);
-    initMsg = "";
-    render();
-    renderSheet(true);
-  }
+$("#meBar").addEventListener("change", (e) => {
+  if (e.target.id !== "meSel") return;
+  me = e.target.value;
+  localStorage.setItem("me:" + room, me);
+  initMsg = "";
+  barKey = "";
+  render();
+  renderSheet(true);
 });
 $("#sheetBody").addEventListener("input", (e) => {
   if (e.target.id === "modIn") {
@@ -170,6 +230,7 @@ document.querySelectorAll("[data-sheet]").forEach((b) =>
   b.addEventListener("click", () => {
     sheet = sheet === b.dataset.sheet ? null : b.dataset.sheet;
     initMsg = "";
+    barKey = "";
     if (st) renderSheet(true);
   }));
 $("#sheetClose").onclick = () => { sheet = null; if (st) renderSheet(true); };

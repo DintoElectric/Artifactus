@@ -1,5 +1,6 @@
 import { call, uid, esc, clamp, TYPES, MapView } from "./common.js";
 import { mountRoller } from "./dice.js";
+import { SheetStore, mountBook, mountNotes, blankSheet } from "./sheet.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const saved = JSON.parse(localStorage.getItem("dmTable") || "null");
@@ -86,6 +87,8 @@ function changed() {
   renderMap();
   renderSide();
   if (tab === "inv") renderInv();
+  if (tab === "party") renderParty();
+  if (tab === "obj") renderObjectives();
   scheduleSave();
 }
 
@@ -289,16 +292,18 @@ $("#revealPcs").onclick = () => {
 };
 
 /* ---------- tabs ---------- */
+const TABS = { map: ["tabMap", "paneMap"], inv: ["tabInv", "paneInv"], party: ["tabParty", "paneParty"], obj: ["tabObj", "paneObj"] };
 function setTab(t) {
   tab = t;
-  $("#tabMap").setAttribute("aria-selected", t === "map");
-  $("#tabInv").setAttribute("aria-selected", t === "inv");
-  $("#paneMap").hidden = t !== "map";
-  $("#paneInv").hidden = t !== "inv";
+  for (const [k, [btn, pane]] of Object.entries(TABS)) {
+    $("#" + btn).setAttribute("aria-selected", k === t);
+    $("#" + pane).hidden = k !== t;
+  }
   if (t === "inv") renderInv();
+  if (t === "party") { renderParty(); pullSheets(); }
+  if (t === "obj") renderObjectives();
 }
-$("#tabMap").onclick = () => setTab("map");
-$("#tabInv").onclick = () => setTab("inv");
+for (const [k, [btn]] of Object.entries(TABS)) $("#" + btn).onclick = () => setTab(k);
 
 /* ---------- tokens ---------- */
 $("#typeSeg").addEventListener("click", (e) => {
@@ -751,6 +756,137 @@ function armDrag(e, itemEl) {
   window.addEventListener("pointercancel", onCancel);
 }
 
+/* ---------- party: spell slots, spells, player notes ---------- */
+const sheets = new Map();   // character id -> { store, el }
+
+function renderParty() {
+  const box = $("#party");
+  const pcs = state.ents.filter((e) => e.type === "pc");
+  for (const [pid, o] of sheets) {
+    if (!pcs.some((p) => p.id === pid)) { o.el.remove(); sheets.delete(pid); }
+  }
+  for (const pc of pcs) {
+    let o = sheets.get(pc.id);
+    if (!o) {
+      const store = new SheetStore(room, pc.id, pin);
+      const el = document.createElement("section");
+      el.className = "pcard";
+      el.innerHTML = '<h2></h2><div class="book"></div><details class="notesbox"><summary>Player notes</summary><div class="nbody"></div></details>';
+      box.appendChild(el);
+      mountBook(el.querySelector(".book"), store, { canEdit: true });
+      mountNotes(el.querySelector(".nbody"), store, { canEdit: false });
+      store.subscribe(() => {
+        el.querySelector("summary").textContent = `Player notes (${store.view.notes.length})`;
+      });
+      o = { store, el };
+      sheets.set(pc.id, o);
+      store.load();
+    }
+    o.el.querySelector("h2").textContent = pc.name;
+  }
+  let empty = box.querySelector(".empty");
+  if (!pcs.length) {
+    if (!empty) { empty = document.createElement("p"); empty.className = "empty"; box.appendChild(empty); }
+    empty.textContent = "Add a Player token to track their spell slots, spells and notes.";
+  } else empty?.remove();
+}
+
+async function pullSheets() {
+  if (!state || tab !== "party" || document.hidden || !sheets.size) return;
+  try {
+    const r = await call(`sheets/${room}`, { pin });
+    for (const [pid, o] of sheets) o.store.adopt(r.sheets[pid] || blankSheet());
+  } catch { /* try again on the next tick */ }
+}
+
+/* ---------- objectives ---------- */
+const STATUS_LABEL = { active: "Active", done: "Completed", failed: "Failed" };
+
+function renderObjectives() {
+  const list = state.objectives;
+  $("#objList").innerHTML = list.length ? list.map((o, i) => `
+    <article class="obj ${o.status} ${o.hidden ? "hid" : ""}" data-id="${o.id}">
+      <header>
+        <h3>${esc(o.title)}</h3>
+        <span class="pill">${o.hidden ? "Hidden · " : ""}${STATUS_LABEL[o.status]}</span>
+      </header>
+      ${o.note ? `<p class="onote">${esc(o.note)}</p>` : ""}
+      ${o.steps.length ? `<ul class="steps">${o.steps.map((st) => `
+        <li><label class="check"><input type="checkbox" data-act="step" data-s="${st.id}" ${st.done ? "checked" : ""}> <span class="${st.done ? "done" : ""}">${esc(st.text)}</span></label></li>`).join("")}</ul>` : ""}
+      <div class="oact">
+        <select data-act="status" aria-label="Status of ${esc(o.title)}">
+          ${Object.entries(STATUS_LABEL).map(([k, v]) => `<option value="${k}" ${o.status === k ? "selected" : ""}>${v}</option>`).join("")}
+        </select>
+        <button class="btn small" data-act="vis">${o.hidden ? "Show to players" : "Hide from players"}</button>
+        <button class="btn small" data-act="edit">Edit</button>
+        <button class="btn small ghost" data-act="up" ${i === 0 ? "disabled" : ""} aria-label="Move up">↑</button>
+        <button class="btn small ghost" data-act="down" ${i === list.length - 1 ? "disabled" : ""} aria-label="Move down">↓</button>
+      </div>
+    </article>`).join("") : '<p class="empty">No objectives yet. Add the party\'s goals, quests or secrets.</p>';
+}
+
+function objDialog(obj) {
+  const isNew = !obj;
+  const o = obj || { id: uid(), title: "", note: "", status: "active", hidden: true, steps: [] };
+  openDlg(`
+    <form>
+      <h2>${isNew ? "Add objective" : "Edit objective"}</h2>
+      <div class="field"><label for="o_title">Title</label><input id="o_title" name="title" type="text" maxlength="80" value="${esc(o.title)}" required autofocus></div>
+      <div class="field"><label for="o_note">Description</label><textarea id="o_note" name="note" rows="3" maxlength="600">${esc(o.note)}</textarea></div>
+      <div class="field"><label for="o_steps">Steps (one per line)</label><textarea id="o_steps" name="steps" rows="4" maxlength="800">${esc(o.steps.map((s) => s.text).join("\n"))}</textarea></div>
+      <div class="field"><label for="o_status">Status</label><select id="o_status" name="status">
+        ${Object.entries(STATUS_LABEL).map(([k, v]) => `<option value="${k}" ${o.status === k ? "selected" : ""}>${v}</option>`).join("")}</select></div>
+      <label class="check field"><input type="checkbox" name="show" ${o.hidden ? "" : "checked"}> Show to players</label>
+      <div class="dlg-actions">
+        ${isNew ? "" : '<button type="button" class="btn danger push" data-delete>Delete</button>'}
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button type="submit" class="btn primary">Save</button>
+      </div>
+    </form>`,
+    (d) => {
+      const title = d.title.trim();
+      if (!title) return;
+      const old = new Map(o.steps.map((s) => [s.text, s]));
+      const steps = String(d.steps || "").split("\n").map((t) => t.trim()).filter(Boolean).slice(0, 20)
+        .map((t) => old.get(t) || { id: uid(), text: t, done: false });
+      Object.assign(o, { title, note: d.note.trim(), steps, status: d.status, hidden: d.show !== "on" });
+      if (isNew) state.objectives.push(o);
+      dlg.close();
+      changed();
+    },
+    (root) => root.querySelector("[data-delete]")?.addEventListener("click", () => {
+      if (!confirm(`Delete "${o.title}"?`)) return;
+      state.objectives = state.objectives.filter((x) => x.id !== o.id);
+      dlg.close();
+      changed();
+    }));
+}
+
+$("#addObj").onclick = () => objDialog(null);
+$("#objList").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-act]");
+  const card = e.target.closest(".obj");
+  if (!b || !card || b.tagName === "SELECT" || b.tagName === "INPUT") return;
+  const list = state.objectives;
+  const i = list.findIndex((x) => x.id === card.dataset.id);
+  if (i < 0) return;
+  const o = list[i];
+  if (b.dataset.act === "edit") objDialog(o);
+  else if (b.dataset.act === "vis") { o.hidden = !o.hidden; changed(); }
+  else if (b.dataset.act === "up" && i > 0) { [list[i - 1], list[i]] = [list[i], list[i - 1]]; changed(); }
+  else if (b.dataset.act === "down" && i < list.length - 1) { [list[i + 1], list[i]] = [list[i], list[i + 1]]; changed(); }
+});
+$("#objList").addEventListener("change", (e) => {
+  const card = e.target.closest(".obj");
+  const o = card && state.objectives.find((x) => x.id === card.dataset.id);
+  if (!o) return;
+  if (e.target.dataset.act === "status") { o.status = e.target.value; changed(); }
+  else if (e.target.dataset.act === "step") {
+    const st = o.steps.find((x) => x.id === e.target.dataset.s);
+    if (st) { st.done = e.target.checked; changed(); }
+  }
+});
+
 /* ---------- initiative sent by players ---------- */
 async function pullSubs() {
   if (!state || document.hidden) return;
@@ -836,6 +972,7 @@ $("#leave").onclick = () => {
     state.grid.ox ||= 0; state.grid.oy ||= 0;
     state.grid.areas ||= [];
     state.feedOn ??= false;
+    state.objectives ||= [];
     state.inv.stash ||= []; state.inv.dm ||= [];
     renderMap();
     renderSide();
@@ -849,6 +986,7 @@ $("#leave").onclick = () => {
     pullSubs();
     pullFeed();
     setInterval(() => { pullSubs(); pullFeed(); }, 3000);
+    setInterval(pullSheets, 4000);
   } catch (err) {
     if (err.status === 401 || err.status === 404) {
       localStorage.removeItem("dmTable");
