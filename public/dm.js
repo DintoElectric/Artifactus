@@ -4,6 +4,7 @@ import { SheetStore, mountBook, mountNotes, blankSheet } from "./sheet.js";
 import { Library, parseSpells } from "./library.js";
 import { mountChar } from "./charsheet.js";
 import { mountCampaign } from "./campaign-ui.js";
+import { mountLocations } from "./locations.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const saved = JSON.parse(localStorage.getItem("dmTable") || "null");
@@ -52,7 +53,8 @@ const ent = (id) => state.ents.find((e) => e.id === id);
 
 /* ---------- saving ---------- */
 let timer = null, saving = false, dirty = false;
-const bump = () => { state.rev = (state.rev || 0) + 1; dirty = true; };
+let locs = null;   // saved locations (see locations.js); told about every change so the active one stays up to date
+const bump = () => { state.rev = (state.rev || 0) + 1; dirty = true; locs?.touch(); };
 
 function setSync(text, bad = false) {
   const s = $("#sync");
@@ -119,20 +121,23 @@ function openDlg(html, onSubmit, onMount) {
 }
 
 /* ---------- map panel ---------- */
+const locPath = () => (state.locId ? "/" + state.locId : "");   // each saved location has its own map and fog files
 function mapSrc() {
   if (!state.mapRev) return null;
-  return localMap?.rev === state.mapRev ? localMap.url : `/api/map/${room}?v=${state.mapRev}`;
+  return localMap?.rev === state.mapRev ? localMap.url : `/api/map/${room}${locPath()}?v=${state.mapRev}`;
 }
 
 function renderMap() {
-  mv.setMap(state.mapRev, mapSrc());
+  mv.setMap(`${state.locId}:${state.mapRev}`, mapSrc());
   mv.update({
     ents: state.ents,
     grid: state.grid,
     turnId: state.init.on ? state.init.turnId : null,
     selId,
   });
-  mv.setFog(state.fog.on, state.fog.rev, state.fog.rev ? `/api/fog/${room}?v=${state.fog.rev}` : null);
+  mv.setFog(state.fog.on, `${state.locId}:${state.fog.rev}`, state.fog.rev ? `/api/fog/${room}${locPath()}?v=${state.fog.rev}` : null);
+  $("#upload").textContent = state.locId ? "Replace map" : "Upload map";
+  locs?.refreshQuick();
   $("#fogOn").checked = !!state.fog.on;
   $("#fogCtl").hidden = !state.fog.on;
   syncPaint();
@@ -147,46 +152,11 @@ function renderMap() {
   sz.value = state.grid.size;
 }
 
-async function compress(file) {
-  const bmp = await createImageBitmap(file);
-  let scale = Math.min(1, 2400 / Math.max(bmp.width, bmp.height));
-  let q = 0.86;
-  for (let i = 0; i < 7; i++) {
-    const w = Math.round(bmp.width * scale), h = Math.round(bmp.height * scale);
-    const c = document.createElement("canvas");
-    c.width = w; c.height = h;
-    const ctx = c.getContext("2d");
-    ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, w, h);
-    ctx.drawImage(bmp, 0, 0, w, h);
-    const blob = await new Promise((r) => c.toBlob(r, "image/jpeg", q));
-    if (blob && blob.size <= 3.4 * 1024 * 1024) return { blob, w, h };
-    q = Math.max(0.6, q - 0.08);
-    scale *= 0.85;
-  }
-  throw new Error("That map is too large even after shrinking. Try a smaller image.");
-}
-
 $("#upload").onclick = () => $("#file").click();
 $("#file").addEventListener("change", async (e) => {
   const f = e.target.files[0];
-  if (!f) return;
-  setSync("Uploading map…");
-  try {
-    const { blob, w, h } = await compress(f);
-    await call(`map/${room}`, { method: "PUT", body: blob, pin });
-    const rev = Date.now();
-    localMap = { rev, url: URL.createObjectURL(blob) };
-    state.mapRev = rev; state.mapW = w; state.mapH = h;
-    state.grid.size = Math.round(Math.max(w, h) / 30);
-    state.fog.rev = 0;
-    changed();
-    toast("Map uploaded. Turn on “Map visible to players” when you're ready to show it.");
-  } catch (err) {
-    setSync("Saved");
-    toast(err.message || "Could not upload the map.");
-  } finally {
-    e.target.value = "";
-  }
+  e.target.value = "";
+  if (f) await locs?.uploadMap(f);
 });
 $("#fit").onclick = () => mv.fit();
 $("#mapOn").onchange = (e) => { state.mapOn = e.target.checked; changed(); };
@@ -254,18 +224,26 @@ function syncPaint() {
 }
 
 /* ---------- fog of war ---------- */
-let fogTimer = null;
+let fogTimer = null, fogPending = false;
 function scheduleFogUpload() {
   setSync("Saving fog…");
+  fogPending = true;
   clearTimeout(fogTimer);
   fogTimer = setTimeout(uploadFog, 450);
 }
+/* Finish saving fog right now (used before switching to another location). */
+async function flushFog() {
+  if (!fogPending) return;
+  clearTimeout(fogTimer);
+  await uploadFog();
+}
 async function uploadFog() {
+  fogPending = false;
   try {
     const blob = await mv.exportFog();
-    await call(`fog/${room}`, { method: "PUT", body: blob, pin });
+    await call(`fog/${room}${locPath()}`, { method: "PUT", body: blob, pin });
     const rev = Date.now();
-    mv.markFogKey(rev);
+    mv.markFogKey(`${state.locId}:${rev}`);
     state.fog.rev = rev;
     changed();
   } catch (err) {
@@ -295,7 +273,7 @@ $("#revealPcs").onclick = () => {
 };
 
 /* ---------- tabs ---------- */
-const TABS = { map: ["tabMap", "paneMap"], inv: ["tabInv", "paneInv"], party: ["tabParty", "paneParty"], obj: ["tabObj", "paneObj"], camp: ["tabCamp", "paneCamp"] };
+const TABS = { map: ["tabMap", "paneMap"], loc: ["tabLoc", "paneLoc"], inv: ["tabInv", "paneInv"], party: ["tabParty", "paneParty"], obj: ["tabObj", "paneObj"], camp: ["tabCamp", "paneCamp"] };
 function setTab(t) {
   tab = t;
   for (const [k, [btn, pane]] of Object.entries(TABS)) {
@@ -306,6 +284,7 @@ function setTab(t) {
   if (t === "party") { renderParty(); pullSheets(); }
   if (t === "obj") renderObjectives();
   if (t === "camp") ensureCampaign();
+  if (t === "loc") locs?.render();
 }
 
 /* Campaign details and session log: loaded the first time the tab is opened. */
@@ -1121,10 +1100,22 @@ $("#leave").onclick = () => {
     state.grid.areas ||= [];
     state.feedOn ??= false;
     state.campRev ??= 0;
+    state.locId ??= "";
+    state.locName ??= "";
     state.objectives ||= [];
     state.inv.stash ||= []; state.inv.dm ||= [];
     renderMap();
     renderSide();
+    locs = mountLocations($("#locRoot"), {
+      room, pin, toast, setSync,
+      state: () => state,
+      changed,
+      quick: $("#locQuick"),
+      flushFog,
+      setLocalMap: (rev, url) => { localMap = { rev, url }; },
+    });
+    await locs.load();
+    renderMap();
     library.load();
     mountRoller($("#dice"), {
       onRoll(r) {

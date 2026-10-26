@@ -147,17 +147,18 @@ window.addEventListener("resize", setDockHeight);
 function render() {
   const I = st.init;
   const showMap = st.mapOn && st.mapRev;
-  if (showMap) mv.setMap(st.mapRev, `/api/map/${room}?v=${st.mapRev}`);
+  const lp = st.locId ? "/" + st.locId : "";   // saved locations have their own map and fog files
+  if (showMap) mv.setMap(`${st.locId || ""}:${st.mapRev}`, `/api/map/${room}${lp}?v=${st.mapRev}`);
   else mv.setMap(null, null, EMPTY_MAP);
   const fog = st.fog || { on: false, rev: 0 };
-  mv.setFog(showMap && fog.on, fog.rev, fog.rev ? `/api/fog/${room}?v=${fog.rev}` : null);
+  mv.setFog(showMap && fog.on, `${st.locId || ""}:${fog.rev}`, fog.rev ? `/api/fog/${room}${lp}?v=${fog.rev}` : null);
   mv.update({ ents: st.ents, grid: st.grid, turnId: I.on ? I.turnId : null });
 
   if (me && !st.ents.some((e) => e.id === me && e.type === "pc")) { saveSession(null); return; }
   const turn = I.on ? st.ents.find((e) => e.id === I.turnId) : null;
   const banner = $("#banner");
   banner.classList.toggle("me", !!turn && turn.id === me);
-  banner.textContent = !I.on ? "" : turn ? (turn.id === me ? "Your turn" : `Round ${I.round} · ${turn.name}`) : `Round ${I.round}`;
+  banner.textContent = !I.on ? st.locName || "" : turn ? (turn.id === me ? "Your turn" : `Round ${I.round} · ${turn.name}`) : `Round ${I.round}`;
   renderFeed();
   renderSheet(false);
   charUI?.refresh();

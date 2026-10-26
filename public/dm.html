@@ -20,6 +20,7 @@
       <button role="tab" id="tabInv" aria-selected="false">Inventory</button>
       <button role="tab" id="tabParty" aria-selected="false">Party</button>
       <button role="tab" id="tabObj" aria-selected="false">Objectives</button>
+      <button role="tab" id="tabLoc" aria-selected="false">Locations</button>
       <button role="tab" id="tabCamp" aria-selected="false">Campaign</button>
     </nav>
     <span class="grow"></span>
@@ -31,6 +32,7 @@
   <main class="main">
     <section class="pane" id="paneMap">
       <div class="maptools">
+        <label class="rng"><label for="locQuick">Location</label><select id="locQuick" style="width:auto;min-height:32px;padding:.1rem .5rem"><option value="">No saved locations</option></select></label>
         <button class="btn small" id="upload" type="button">Upload map</button>
         <button class="btn small" id="fit" type="button">Fit to screen</button>
         <label class="check"><input type="checkbox" id="gridOn"> Grid</label>
@@ -83,6 +85,9 @@
         <span class="hint">Give each player a PIN under "Player login" so they sign in to their own character.</span>
       </div>
       <div class="party" id="party"></div>
+    </section>
+    <section class="pane" id="paneLoc" hidden>
+      <div id="locRoot" class="camproot"></div>
     </section>
     <section class="pane" id="paneCamp" hidden>
       <div id="campRoot" class="camproot"></div>

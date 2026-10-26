@@ -22,6 +22,9 @@
 //   GET    /api/campdoc/CODE      DM reads the campaign details and session log  header x-pin
 //   PUT    /api/campdoc/CODE      DM saves them                  { doc }
 //   GET    /api/campaign/CODE     what the DM has chosen to share with players
+//   GET    /api/locs/CODE         DM reads the saved locations (maps, grid, fog, token spots)  header x-pin
+//   PUT    /api/locs/CODE         DM saves them                  { doc }
+//   PUT|GET|DELETE /api/map/CODE/LOC, /api/fog/CODE/LOC, /api/thumb/CODE/LOC   a location's own files
 //   POST   /api/playerlogin/CODE  player logs into a character   { pid, pin } -> { token }
 //   GET    /api/logins/CODE       DM: which characters have a PIN  header x-pin
 //   PUT    /api/logins/CODE/PID   DM sets a character's PIN      { pin }
@@ -57,6 +60,8 @@ const blankState = () => ({
   subT: 0,
   feedOn: false,
   campRev: 0,
+  locId: "",
+  locName: "",
   objectives: [],
   grid: { on: false, size: 60, snap: false, opacity: 0.3, dark: false, ox: 0, oy: 0, areas: [] },
   fog: { on: false, rev: 0 },
@@ -94,6 +99,7 @@ const KB = 1024;
 const MAX_MAP = 4.6 * KB * KB;
 const MAX_FOG = 600 * KB;
 const MAX_IMG = 400 * KB;
+const MAX_THUMB = 150 * KB;
 
 /* Roll feed. Each roll is its own blob whose KEY carries the data, so one list call reads
    the whole feed and two rolls at the same moment can never overwrite each other. */
@@ -225,6 +231,38 @@ function sharedCamp(d) {
   return { rev: d.rev, campaign: { name: d.campaign.name, fields }, sessions };
 }
 
+/* Saved locations: each remembers its map, grid, fog and where the tokens stood. DM-only document. */
+const flt = (v, lo, hi, def) => { const n = Number(v); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : def; };
+function cleanGrid(g) {
+  g = g && typeof g === "object" ? g : {};
+  const areas = (Array.isArray(g.areas) ? g.areas : []).slice(0, 12)
+    .map((poly) => (Array.isArray(poly) ? poly : []).slice(0, 80)
+      .map((p) => [flt(p?.[0], 0, 1, 0), flt(p?.[1], 0, 1, 0)]))
+    .filter((poly) => poly.length >= 3);
+  return { on: !!g.on, size: flt(g.size, 8, 2000, 60), snap: !!g.snap, opacity: flt(g.opacity, 0.03, 1, 0.3), dark: !!g.dark,
+    ox: flt(g.ox, -5000, 5000, 0), oy: flt(g.oy, -5000, 5000, 0), areas };
+}
+function cleanLocs(d) {
+  const locations = (Array.isArray(d?.locations) ? d.locations : []).slice(0, 80).map((l) => {
+    const tokens = {};
+    for (const [k, v] of Object.entries(l?.tokens && typeof l.tokens === "object" ? l.tokens : {}).slice(0, 300)) {
+      const id = cleanId(k);
+      if (id) tokens[id] = { x: flt(v?.x, 0, 1, 0.5), y: flt(v?.y, 0, 1, 0.5), hidden: !!v?.hidden };
+    }
+    return {
+      id: cleanId(l?.id) || Math.random().toString(36).slice(2, 9),
+      name: str(l?.name, 80).trim() || "Untitled",
+      notes: str(l?.notes, 1500),
+      mapRev: num(l?.mapRev, 0, 9e15, 0), mapW: num(l?.mapW, 0, 20000, 0), mapH: num(l?.mapH, 0, 20000, 0),
+      thumbRev: num(l?.thumbRev, 0, 9e15, 0),
+      grid: cleanGrid(l?.grid),
+      fog: { on: !!l?.fog?.on, rev: num(l?.fog?.rev, 0, 9e15, 0) },
+      tokens,
+    };
+  });
+  return { locations };
+}
+
 const imageResponse = (r, fallbackType) =>
   new Response(r.data, {
     headers: {
@@ -302,15 +340,18 @@ export default async (req) => {
       return reply({ ok: true, rev: s.rev });
     }
 
-    // Binary assets: map, fog mask, token images
+    // Binary assets: maps and fog masks (one set per saved location; no id means the original single map),
+    // location thumbnails, and token images.
+    const sid = cleanId(rawId);
     const assets = {
-      map: { key: `map/${room}`, max: MAX_MAP, type: /^image\// , fallback: "image/jpeg" },
-      fog: { key: `fog/${room}`, max: MAX_FOG, type: /^image\/png/, fallback: "image/png" },
-      img: { key: `img/${room}/${cleanId(rawId)}`, max: MAX_IMG, type: /^image\//, fallback: "image/jpeg" },
+      map: { key: sid ? `map/${room}/${sid}` : `map/${room}`, max: MAX_MAP, type: /^image\// , fallback: "image/jpeg" },
+      fog: { key: sid ? `fog/${room}/${sid}` : `fog/${room}`, max: MAX_FOG, type: /^image\/png/, fallback: "image/png" },
+      thumb: { key: `thumb/${room}/${sid}`, max: MAX_THUMB, type: /^image\//, fallback: "image/jpeg" },
+      img: { key: `img/${room}/${sid}`, max: MAX_IMG, type: /^image\//, fallback: "image/jpeg" },
     }[route];
 
     if (assets) {
-      if (route === "img" && !cleanId(rawId)) return fail(400, "Missing token id.");
+      if ((route === "img" || route === "thumb") && !sid) return fail(400, "Missing id.");
       if (req.method === "GET") {
         const r = await store.getWithMetadata(assets.key, { type: "arrayBuffer" });
         if (!r) return fail(404, "Not found.");
@@ -326,7 +367,7 @@ export default async (req) => {
         await store.set(assets.key, buf, { metadata: { type } });
         return reply({ ok: true });
       }
-      if (req.method === "DELETE" && route === "img") {
+      if (req.method === "DELETE" && sid) {
         const denied = await dmOnly();
         if (denied) return denied;
         await store.delete(assets.key);
@@ -489,6 +530,20 @@ export default async (req) => {
       if (maxHp !== undefined && maxHp !== null) rec.maxHp = num(maxHp, 1, 9999, 1);
       await store.setJSON(`pcu/${room}/${cleanId(e.id)}`, rec);
       return reply({ ok: true });
+    }
+
+    if (route === "locs" && (req.method === "GET" || req.method === "PUT")) {
+      const denied = await dmOnly();
+      if (denied) return denied;
+      const prev = await store.get(`locs/${room}`, { type: "json" });
+      if (req.method === "GET") return reply({ doc: { ...cleanLocs(prev), rev: prev?.rev || 0 } });
+      const text = await req.text();
+      if (text.length > 800000) return fail(413, "The saved locations are too large.");
+      let body;
+      try { body = JSON.parse(text); } catch { return fail(400, "Bad data."); }
+      const rev = (prev?.rev || 0) + 1;
+      await store.setJSON(`locs/${room}`, { ...cleanLocs(body.doc), rev });
+      return reply({ ok: true, rev });
     }
 
     if (route === "campaign" && req.method === "GET") {
