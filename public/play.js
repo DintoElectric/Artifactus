@@ -3,6 +3,7 @@ import { mountRoller, rand } from "./dice.js";
 import { SheetStore, mountBook, mountNotes } from "./sheet.js";
 import { mountChar } from "./charsheet.js";
 import { Library } from "./library.js";
+import { CAMPAIGN_FIELDS, SESSION_FIELDS, prettyDate } from "./campaign.js";
 
 const $ = (s) => document.querySelector(s);
 const params = new URLSearchParams(location.search);
@@ -11,8 +12,8 @@ if (!room) { location.replace("/"); throw new Error("No table"); }
 $("#pcode").textContent = room;
 
 const EMPTY_MAP = "Waiting for the DM to show the map…";
-const TITLES = { init: "Initiative", goals: "Goals", inv: "Items", char: "Character sheet", spells: "Spells", notes: "Notes", dice: "Dice" };
-const PANES = { init: "sheetBody", goals: "sheetBody", inv: "sheetBody", char: "charBody", spells: "spellBody", notes: "noteBody", dice: "diceBody" };
+const TITLES = { init: "Initiative", goals: "Goals", camp: "Campaign", inv: "Items", char: "Character sheet", spells: "Spells", notes: "Notes", dice: "Dice" };
+const PANES = { init: "sheetBody", goals: "sheetBody", camp: "campBody", inv: "sheetBody", char: "charBody", spells: "spellBody", notes: "noteBody", dice: "diceBody" };
 
 let st = null, rev = "", ft = 0, feed = null, sheet = null, sheetKey = "", initMsg = "";
 let mod = parseInt(localStorage.getItem("mod:" + room)) || 0;
@@ -252,10 +253,11 @@ function renderSheet(force) {
   if (!sheet) { box.hidden = true; return; }
   box.hidden = false;
   $("#sheetTitle").textContent = TITLES[sheet];
-  for (const id of ["sheetBody", "charBody", "spellBody", "noteBody", "diceBody"]) $("#" + id).hidden = id !== PANES[sheet];
-  box.classList.toggle("tall", ["char", "spells", "notes"].includes(sheet));
+  for (const id of ["sheetBody", "campBody", "charBody", "spellBody", "noteBody", "diceBody"]) $("#" + id).hidden = id !== PANES[sheet];
+  box.classList.toggle("tall", ["char", "spells", "notes", "camp"].includes(sheet));
   if (!st) return;
   if (sheet === "dice") return;
+  if (sheet === "camp") { loadCamp(); return; }
   if (sheet === "char" || sheet === "spells" || sheet === "notes") { bindStore(); return; }
 
   const pcs = st.ents.filter((e) => e.type === "pc");
@@ -314,6 +316,36 @@ function renderSheet(force) {
     body.innerHTML = (me ? itemList(st.inv[me]) : loginPrompt("see your items")) +
       `<p class="plabel">Party stash</p>` + itemList(st.inv.stash);
   }
+}
+
+/* Campaign details the DM chose to share. Fetched when the panel opens, and again if the DM changes them. */
+let camp = null, campLoaded = -1;
+async function loadCamp(force) {
+  if (!st) return;
+  const want = st.campRev || 0;
+  if (!force && camp && campLoaded === want) return;
+  if (!camp) $("#campBody").innerHTML = '<p class="empty">Loading…</p>';
+  try {
+    camp = await call(`campaign/${room}`);
+    campLoaded = want;
+    renderCamp();
+  } catch {
+    if (!camp) $("#campBody").innerHTML = '<p class="empty">Could not load the campaign. Try again in a moment.</p>';
+  }
+}
+
+function renderCamp() {
+  const fields = camp.campaign.fields;
+  const blocks = CAMPAIGN_FIELDS.filter((f) => fields[f.key])
+    .map((f) => `<article class="cdoc"><h4>${esc(f.label)}</h4><p>${esc(fields[f.key])}</p></article>`).join("");
+  const sessions = [...camp.sessions].sort((a, b) => b.number - a.number).map((s, i) => `
+    <details class="csess" ${i === 0 ? "open" : ""}>
+      <summary>Session ${s.number}${s.title ? ": " + esc(s.title) : ""}${s.date ? `<small>${esc(prettyDate(s.date))}</small>` : ""}</summary>
+      ${SESSION_FIELDS.filter((f) => s.fields[f.key]).map((f) => `<article class="cdoc"><h4>${esc(f.label)}</h4><p>${esc(s.fields[f.key])}</p></article>`).join("")}
+    </details>`).join("");
+  $("#campBody").innerHTML = (blocks || sessions)
+    ? `${camp.campaign.name ? `<h3 class="campname">${esc(camp.campaign.name)}</h3>` : ""}${blocks}${sessions ? `<h3 class="goalhead">Session log</h3>${sessions}` : ""}`
+    : '<p class="empty">Your DM hasn\'t shared any campaign details yet.</p>';
 }
 
 async function sendInit(value, note) {

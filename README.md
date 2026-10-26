@@ -22,5 +22,6 @@ Existing tables keep working after an update.
 - Player sheets (spell slots, known spells, notes) are saved on the server per character. The DM can edit slots and spells and read the notes.
 - Spell library: the DM imports a CSV, TSV or JSON list (Party tab, "Spell library"). Players search it and add spells to their sheets. To ship a default list with the app, add `public/spells.json` (an array of objects with name, level, school, time, range, comp, dur, classes, desc).
 - Item lists and HP for player characters are still visible to every player at the table.
+- Campaign tab (DM): game details (overview, premise, themes, setting, factions, table rules, secrets) and a session log (recap, accomplished, learned, earned, people and places, open threads, private notes). Each section can be shared with players, who see it under Campaign. Export a Word (.docx) report: a full DM version or a player recap of shared items only. Secrets and DM notes can never be shared.
 - Objectives are DM-managed; each one is hidden or shown to players.
 - Grid tools: dim the grid, slide it under the map, and outline shapes so the grid stops at the edges of irregular maps.

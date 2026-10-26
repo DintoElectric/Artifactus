@@ -3,6 +3,7 @@ import { mountRoller } from "./dice.js";
 import { SheetStore, mountBook, mountNotes, blankSheet } from "./sheet.js";
 import { Library, parseSpells } from "./library.js";
 import { mountChar } from "./charsheet.js";
+import { mountCampaign } from "./campaign-ui.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const saved = JSON.parse(localStorage.getItem("dmTable") || "null");
@@ -294,7 +295,7 @@ $("#revealPcs").onclick = () => {
 };
 
 /* ---------- tabs ---------- */
-const TABS = { map: ["tabMap", "paneMap"], inv: ["tabInv", "paneInv"], party: ["tabParty", "paneParty"], obj: ["tabObj", "paneObj"] };
+const TABS = { map: ["tabMap", "paneMap"], inv: ["tabInv", "paneInv"], party: ["tabParty", "paneParty"], obj: ["tabObj", "paneObj"], camp: ["tabCamp", "paneCamp"] };
 function setTab(t) {
   tab = t;
   for (const [k, [btn, pane]] of Object.entries(TABS)) {
@@ -304,6 +305,19 @@ function setTab(t) {
   if (t === "inv") renderInv();
   if (t === "party") { renderParty(); pullSheets(); }
   if (t === "obj") renderObjectives();
+  if (t === "camp") ensureCampaign();
+}
+
+/* Campaign details and session log: loaded the first time the tab is opened. */
+let campaign = null;
+function ensureCampaign() {
+  if (campaign) return;
+  campaign = mountCampaign($("#campRoot"), {
+    room, pin, toast,
+    // Players refresh their Campaign panel when the revision in the table state changes.
+    onShared(rev) { state.campRev = rev; bump(); scheduleSave(); },
+  });
+  campaign.load();
 }
 for (const [k, [btn]] of Object.entries(TABS)) $("#" + btn).onclick = () => setTab(k);
 
@@ -1106,6 +1120,7 @@ $("#leave").onclick = () => {
     state.grid.ox ||= 0; state.grid.oy ||= 0;
     state.grid.areas ||= [];
     state.feedOn ??= false;
+    state.campRev ??= 0;
     state.objectives ||= [];
     state.inv.stash ||= []; state.inv.dm ||= [];
     renderMap();

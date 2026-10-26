@@ -19,6 +19,9 @@
 //   PUT    /api/sheet/CODE/PID    save them (compare-and-set on rev) { rev, sheet }
 //   GET    /api/sheets/CODE       DM reads every player's sheet  header x-pin
 //   POST   /api/hp/CODE           a player sends an HP change to the DM  { id, hp, maxHp }
+//   GET    /api/campdoc/CODE      DM reads the campaign details and session log  header x-pin
+//   PUT    /api/campdoc/CODE      DM saves them                  { doc }
+//   GET    /api/campaign/CODE     what the DM has chosen to share with players
 //   POST   /api/playerlogin/CODE  player logs into a character   { pid, pin } -> { token }
 //   GET    /api/logins/CODE       DM: which characters have a PIN  header x-pin
 //   PUT    /api/logins/CODE/PID   DM sets a character's PIN      { pin }
@@ -53,6 +56,7 @@ const blankState = () => ({
   mapOn: false,
   subT: 0,
   feedOn: false,
+  campRev: 0,
   objectives: [],
   grid: { on: false, size: 60, snap: false, opacity: 0.3, dark: false, ox: 0, oy: 0, areas: [] },
   fog: { on: false, rev: 0 },
@@ -189,6 +193,36 @@ function cleanSheet(s) {
     .map((p) => ({ id: id(p?.id), name: str(p?.name, 60).trim(), level: int(p?.level, 0, 9), note: str(p?.note, 160), prepared: !!p?.prepared }))
     .filter((p) => p.name);
   return { notes, slots, spells, char: cleanChar(s.char) };
+}
+
+/* Campaign details and session log. DM-only document; players only ever receive the parts the DM shared. */
+const CAMP_SHARE = ["overview", "premise", "themes", "setting", "factions", "rules", "notes"];
+const CAMP_ALL = [...CAMP_SHARE, "secrets"];                       // "secrets" can never be shared
+const SESS_SHARE = ["recap", "accomplished", "learned", "earned", "npcs", "threads"];
+const SESS_ALL = [...SESS_SHARE, "dmnotes"];                       // "dmnotes" can never be shared
+const campField = (f, shareable) => ({ text: str(f?.text, 20000), shared: shareable && !!f?.shared });
+function cleanCamp(d) {
+  d = d && typeof d === "object" ? d : {};
+  const c = d.campaign || {};
+  const campaign = { name: str(c.name, 80), fields: {} };
+  for (const k of CAMP_ALL) campaign.fields[k] = campField(c.fields?.[k], CAMP_SHARE.includes(k));
+  const sessions = (Array.isArray(d.sessions) ? d.sessions : []).slice(0, 300).map((x) => {
+    const fields = {};
+    for (const k of SESS_ALL) fields[k] = campField(x?.fields?.[k], SESS_SHARE.includes(k));
+    return { id: cleanId(x?.id) || Math.random().toString(36).slice(2, 9), number: Math.min(9999, Math.max(0, Math.round(Number(x?.number)) || 0)), title: str(x?.title, 120), date: str(x?.date, 20), fields };
+  });
+  return { campaign, sessions };
+}
+const readCamp = (raw) => (raw ? { ...cleanCamp(raw), rev: raw.rev || 0 } : { ...cleanCamp({}), rev: 0 });
+function sharedCamp(d) {
+  const fields = {};
+  for (const k of CAMP_SHARE) { const f = d.campaign.fields[k]; if (f.shared && f.text.trim()) fields[k] = f.text; }
+  const sessions = d.sessions.map((x) => {
+    const sf = {};
+    for (const k of SESS_SHARE) { const f = x.fields[k]; if (f.shared && f.text.trim()) sf[k] = f.text; }
+    return Object.keys(sf).length ? { id: x.id, number: x.number, title: x.title, date: x.date, fields: sf } : null;
+  }).filter(Boolean);
+  return { rev: d.rev, campaign: { name: d.campaign.name, fields }, sessions };
 }
 
 const imageResponse = (r, fallbackType) =>
@@ -455,6 +489,23 @@ export default async (req) => {
       if (maxHp !== undefined && maxHp !== null) rec.maxHp = num(maxHp, 1, 9999, 1);
       await store.setJSON(`pcu/${room}/${cleanId(e.id)}`, rec);
       return reply({ ok: true });
+    }
+
+    if (route === "campaign" && req.method === "GET") {
+      return reply(sharedCamp(readCamp(await store.get(`camp/${room}`, { type: "json" }))));
+    }
+    if (route === "campdoc" && (req.method === "GET" || req.method === "PUT")) {
+      const denied = await dmOnly();
+      if (denied) return denied;
+      const prev = await store.get(`camp/${room}`, { type: "json" });
+      if (req.method === "GET") return reply({ doc: readCamp(prev) });
+      const text = await req.text();
+      if (text.length > 1500000) return fail(413, "The campaign document is too large.");
+      let body;
+      try { body = JSON.parse(text); } catch { return fail(400, "Bad data."); }
+      const rev = (prev?.rev || 0) + 1;
+      await store.setJSON(`camp/${room}`, { ...cleanCamp(body.doc), rev });
+      return reply({ ok: true, rev });
     }
 
     if (route === "subs" && req.method === "GET") {
