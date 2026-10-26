@@ -127,7 +127,7 @@ const cleanLib = (list) =>
     comp: str(p?.comp, 60),
     dur: str(p?.dur, 40),
     classes: str(p?.classes, 60),
-    desc: str(p?.desc, 1500),
+    desc: str(p?.desc, 4000),
   })).filter((p) => p.name);
 
 /* Player sheets: notes, spell slots and known spells. One blob per character, saved with a
