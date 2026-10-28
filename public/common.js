@@ -2,7 +2,104 @@ export const TYPES = {
   pc: { label: "Player", color: "#4fb3d6" },
   npc: { label: "NPC", color: "#e3a93b" },
   enemy: { label: "Enemy", color: "#d9525f" },
+  object: { label: "Object", color: "#a98bd9" },   // chests, doors, traps, barrels: things, not people
 };
+
+/* How an object is drawn. "box" and "round" are solid pieces that can carry a picture; the others are top-down
+   footprints (roof, tent, hull) drawn as outlines you can see the map through. */
+export const OBJECT_SHAPES = [
+  ["box", "Square or rectangle"], ["round", "Circle or oval"], ["house", "House or building"],
+  ["tent", "Tent"], ["yurt", "Round tent"], ["boat", "Boat"],
+];
+export const STRUCT_SHAPES = new Set(["house", "tent", "yurt", "boat"]);
+export const OBJECT_TINTS = [
+  ["", "Purple"], ["#a9774a", "Wood"], ["#8d9097", "Stone"], ["#d8c9a3", "Canvas"], ["#5b9fd6", "Water"],
+  ["#6fae6a", "Green"], ["#c4574f", "Brick red"], ["#d8b04a", "Gold"], ["#3f3f46", "Dark"],
+];
+
+/* Ready-made objects for the add form: [name, picture, shape, width, height, colour], sizes in grid squares. */
+export const OBJECT_PRESETS = [
+  ["Furniture", [
+    ["Table", "", "box", 2, 1, "#a9774a"], ["Round table", "", "round", 2, 2, "#a9774a"], ["Long table", "", "box", 4, 1, "#a9774a"],
+    ["Bench", "", "box", 2, 0.5, "#a9774a"], ["Bed", "🛏️", "box", 1, 2, "#c9b8d9"], ["Chair", "🪑", "box", 0.5, 0.5, "#a9774a"],
+    ["Bookshelf", "📚", "box", 2, 0.5, "#8a5a34"],
+  ]],
+  ["Boats", [
+    ["Canoe", "", "boat", 1, 2.5, "#8b6a46"], ["Rowboat", "", "boat", 1.5, 3.5, "#8b6a46"], ["Sailboat", "", "boat", 2.5, 6, "#8b6a46"],
+    ["Ship", "", "boat", 4, 10, "#7a5a3a"], ["Raft", "", "box", 3, 3, "#a9774a"],
+  ]],
+  ["Buildings", [
+    ["House", "", "house", 6, 5, "#8d9097"], ["Cabin", "", "house", 4, 3, "#a9774a"], ["Hut", "", "house", 3, 3, "#a9774a"],
+    ["Shop", "", "house", 5, 4, "#c4574f"], ["Round tower", "🏰", "round", 4, 4, "#8d9097"], ["Wall", "", "box", 4, 0.5, "#8d9097"],
+    ["Fence", "", "box", 4, 0.25, "#a9774a"],
+  ]],
+  ["Tents and camp", [
+    ["Tent", "", "tent", 2, 3, "#d8c9a3"], ["Large tent", "", "tent", 4, 6, "#d8c9a3"], ["Round tent", "", "yurt", 4, 4, "#d8c9a3"],
+    ["Bedroll", "", "box", 0.75, 2, "#d8c9a3"], ["Campfire", "🔥", "round", 1, 1, ""],
+  ]],
+  ["Dungeon and props", [
+    ["Door", "", "box", 1, 0.3, "#a9774a"], ["Crate", "📦", "box", 1, 1, ""], ["Chest", "🧰", "box", 1, 1, ""],
+    ["Barrel", "🛢️", "round", 1, 1, ""], ["Trap", "⚠️", "box", 1, 1, ""], ["Pit", "🕳️", "round", 2, 2, "#3f3f46"],
+    ["Statue", "🗿", "round", 1, 1, "#8d9097"], ["Lever", "⚙️", "box", 1, 1, ""], ["Coffin", "⚰️", "box", 1, 2, ""],
+    ["Altar", "", "box", 2, 1, "#8d9097"], ["Stairs", "", "box", 2, 2, "#8d9097"],
+  ]],
+  ["Nature", [
+    ["Tree", "🌳", "round", 2, 2, "#6fae6a"], ["Bush", "🌿", "round", 1, 1, "#6fae6a"], ["Boulder", "🪨", "round", 2, 2, "#8d9097"],
+    ["Pond", "", "round", 4, 3, "#5b9fd6"],
+  ]],
+  ["Treasure and items", [
+    ["Treasure", "💰", "round", 1, 1, ""], ["Key", "🗝️", "round", 0.5, 0.5, ""], ["Scroll", "📜", "box", 0.5, 0.5, ""],
+    ["Potion", "⚗️", "round", 0.5, 0.5, ""], ["Marker", "⭐", "round", 1, 1, ""], ["Mystery", "❓", "box", 1, 1, ""],
+  ]],
+];
+
+/* The inside of the little drawing for a footprint shape, in pixels (so it scales with the map). */
+export function shapeSVG(shape, W, H) {
+  const sw = Math.max(2, Math.min(W, H) * 0.06), p = sw / 2;
+  const x0 = p, y0 = p, x1 = W - p, y1 = H - p, w = x1 - x0, h = y1 - y0, cx = W / 2, cy = H / 2;
+  const n = (v) => v.toFixed(1);
+  const body = (d) => `<path class="body" d="${d}" stroke-width="${n(sw)}" stroke-linejoin="round"/>`;
+  const ln = (a, b, c, d, k = 0.55) => `<line class="det" x1="${n(a)}" y1="${n(b)}" x2="${n(c)}" y2="${n(d)}" stroke-width="${n(sw * k)}" stroke-linecap="round"/>`;
+  const tall = H > W;
+  if (shape === "house") {                                   // a hip roof seen from above: ridge plus four hips
+    const m = Math.min(w, h) * 0.34;
+    let out = body(`M${n(x0)} ${n(y0)}H${n(x1)}V${n(y1)}H${n(x0)}Z`);
+    if (!tall) { const a = x0 + m, b = x1 - m; out += ln(a, cy, b, cy) + ln(x0, y0, a, cy) + ln(x1, y0, b, cy) + ln(x0, y1, a, cy) + ln(x1, y1, b, cy); }
+    else { const a = y0 + m, b = y1 - m; out += ln(cx, a, cx, b) + ln(x0, y0, cx, a) + ln(x1, y0, cx, a) + ln(x0, y1, cx, b) + ln(x1, y1, cx, b); }
+    return out;
+  }
+  if (shape === "tent") {                                    // a ridge tent: a long six-sided shape with a ridge line
+    const t = Math.min(w, h) * 0.3;
+    return !tall
+      ? body(`M${n(x0)} ${n(cy)}L${n(x0 + t)} ${n(y0)}H${n(x1 - t)}L${n(x1)} ${n(cy)}L${n(x1 - t)} ${n(y1)}H${n(x0 + t)}Z`) + ln(x0 + t, cy, x1 - t, cy)
+      : body(`M${n(cx)} ${n(y0)}L${n(x1)} ${n(y0 + t)}V${n(y1 - t)}L${n(cx)} ${n(y1)}L${n(x0)} ${n(y1 - t)}V${n(y0 + t)}Z`) + ln(cx, y0 + t, cx, y1 - t);
+  }
+  if (shape === "yurt") {                                    // a round tent: a circle with spokes to a centre pole
+    let out = `<ellipse class="body" cx="${n(cx)}" cy="${n(cy)}" rx="${n(w / 2)}" ry="${n(h / 2)}" stroke-width="${n(sw)}"/>`;
+    for (let i = 0; i < 8; i++) {
+      const a = (i * Math.PI) / 4, c = Math.cos(a), s = Math.sin(a);
+      out += ln(cx + (w / 2) * 0.1 * c, cy + (h / 2) * 0.1 * s, cx + (w / 2) * c, cy + (h / 2) * s, 0.4);
+    }
+    return out + `<ellipse class="det" cx="${n(cx)}" cy="${n(cy)}" rx="${n(w * 0.05)}" ry="${n(h * 0.05)}" stroke-width="${n(sw * 0.5)}"/>`;
+  }
+  if (shape === "boat") {                                    // a hull with the bow at the top, benches and a mast
+    const hull = [[0.5, 0], [0.82, 0.16], [0.96, 0.62], [0.88, 1], [0.12, 1], [0.04, 0.62], [0.18, 0.16]];
+    const pt = ([a, b], k = 1) => `${n(cx + (a - 0.5) * w * k)} ${n(y0 + h * 0.52 + (b - 0.52) * h * k)}`;
+    return body("M" + hull.map((q) => pt(q)).join("L") + "Z") +
+      `<path class="det" d="M${hull.map((q) => pt(q, 0.74)).join("L")}Z" fill="none" stroke-width="${n(sw * 0.45)}" stroke-linejoin="round"/>` +
+      ln(cx - w * 0.28, y0 + h * 0.4, cx + w * 0.28, y0 + h * 0.4, 0.5) + ln(cx - w * 0.3, y0 + h * 0.7, cx + w * 0.3, y0 + h * 0.7, 0.5) +
+      `<circle class="det" cx="${n(cx)}" cy="${n(y0 + h * 0.5)}" r="${n(Math.min(w, h) * 0.07)}" stroke-width="${n(sw * 0.5)}"/>`;
+  }
+  return "";
+}
+
+/* Pictures to choose from for object tokens: [symbol, name]. */
+export const OBJECT_ICONS = [
+  ["📦", "Crate"], ["🧰", "Chest"], ["🛢️", "Barrel"], ["🚪", "Door"], ["🪜", "Ladder"], ["🕳️", "Pit"], ["⚠️", "Trap"], ["🔥", "Fire"],
+  ["🕯️", "Torch"], ["🗝️", "Key"], ["💰", "Treasure"], ["💎", "Gem"], ["📜", "Scroll"], ["📖", "Book"], ["⚗️", "Potion"], ["🗡️", "Weapon"],
+  ["🛡️", "Shield"], ["🪑", "Chair"], ["🛏️", "Bed"], ["🔔", "Bell"], ["⚰️", "Coffin"], ["🗿", "Statue"], ["🪦", "Gravestone"], ["🌳", "Tree"],
+  ["🪨", "Boulder"], ["🕸️", "Web"], ["💀", "Remains"], ["⚙️", "Lever"], ["🔒", "Lock"], ["⛲", "Fountain"], ["❓", "Mystery"], ["⭐", "Marker"],
+];
 
 /* The signed-in account (one login for running campaigns and for playing characters). */
 export const getAccount = () => {
@@ -215,27 +312,33 @@ export class MapView {
         el = document.createElement("div");
         el.className = "tok";
         el.dataset.id = e.id;
-        el.innerHTML = '<img class="tok-img" alt="" draggable="false"><span class="tok-face"></span><span class="tok-name"></span>';
-        el._img = el.children[0];
-        el._face = el.children[1];
-        el._name = el.children[2];
+        el.innerHTML = '<svg class="tok-shape" xmlns="http://www.w3.org/2000/svg"></svg><img class="tok-img" alt="" draggable="false"><span class="tok-face"></span><span class="tok-name"></span>';
+        el._shape = el.children[0];
+        el._img = el.children[1];
+        el._face = el.children[2];
+        el._name = el.children[3];
         el._img.addEventListener("error", () => el.classList.remove("has-img"));
         this.tokLayer.appendChild(el);
         this.els.set(e.id, el);
       }
-      const s = this.cellSizeAt(e.x, e.y) * (e.size || 1);
-      el.style.setProperty("--s", s + "px");
-      el.style.setProperty("--c", TYPES[e.type]?.color || "#999");
-      el.style.width = el.style.height = s + "px";
+      const { ws, hs } = this.sizeToken(el, e, e.x, e.y);
+      el.style.setProperty("--c", (e.type === "object" && e.tint) || TYPES[e.type]?.color || "#999");
       if (!(this.drag && this.drag.moved && this.drag.id === e.id)) {
-        el.style.left = e.x * w - s / 2 + "px";
-        el.style.top = e.y * h - s / 2 + "px";
+        el.style.left = e.x * w - ws / 2 + "px";
+        el.style.top = e.y * h - hs / 2 + "px";
       }
+      const obj = e.type === "object";
+      const struct = obj && STRUCT_SHAPES.has(e.shape);
+      el.classList.toggle("obj", obj);
+      el.classList.toggle("struct", struct);
+      el.classList.toggle("round", obj && e.shape === "round");
+      el.classList.toggle("inside", obj && (e.labelIn ?? struct));
+      el.classList.toggle("nolabel", !!e.noLabel);
       el.classList.toggle("hidden", !!e.hidden);
       el.classList.toggle("down", !!e.down);
       el.classList.toggle("turn", this.turnId === e.id);
       el.classList.toggle("sel", this.selId === e.id);
-      el._face.textContent = e.down ? "✕" : initials(e.name);
+      el._face.textContent = e.down ? "✕" : e.type === "object" ? e.icon ?? "📦" : initials(e.name);
       el._name.textContent = e.name;
       const url = this.cb.imgUrl?.(e) || "";
       if (el._img.dataset.src !== url) {
@@ -378,6 +481,36 @@ export class MapView {
     const wx = (Math.floor((nx * this.dim.w - ox) / g) + 0.5) * g + ox;
     const wy = (Math.floor((ny * this.dim.h - oy) / g) + 0.5) * g + oy;
     return { x: clamp(wx / this.dim.w, 0, 1), y: clamp(wy / this.dim.h, 0, 1) };
+  }
+
+  /* Size a token's element. People are circles (one size). Objects can be any width and height, in grid squares,
+     and can be turned; their name stays upright. Returns the pixel width and height. */
+  sizeToken(el, e, x, y) {
+    const base = this.cellSizeAt(x, y);
+    const obj = e.type === "object";
+    const ws = base * (obj ? clamp(Number(e.w) || 1, 0.25, 12) : e.size || 1);
+    const hs = base * (obj ? clamp(Number(e.h) || 1, 0.25, 12) : e.size || 1);
+    el.style.width = ws + "px";
+    el.style.height = hs + "px";
+    el.style.setProperty("--s", Math.min(ws, hs) + "px");
+    el.style.setProperty("--ls", (obj ? base : Math.min(ws, hs)) + "px");
+    if (obj) {
+      const rot = (((Math.round(Number(e.rot)) || 0) % 360) + 360) % 360, r = (rot * Math.PI) / 180;
+      el.style.transform = rot ? `rotate(${rot}deg)` : "";
+      el.style.setProperty("--rot", rot + "deg");
+      // how far below the middle the turned object reaches, so the name sits under it
+      el.style.setProperty("--ly", Math.abs((ws / 2) * Math.sin(r)) + Math.abs((hs / 2) * Math.cos(r)) + base * 0.14 + "px");
+    } else {
+      el.style.transform = "";
+    }
+    // footprint shapes (roof, tent, hull) are drawn to the exact size, so they never look stretched
+    const key = obj && STRUCT_SHAPES.has(e.shape) ? `${e.shape}|${Math.round(ws)}|${Math.round(hs)}` : "";
+    if (el._shapeKey !== key) {
+      el._shapeKey = key;
+      el._shape.setAttribute("viewBox", `0 0 ${ws} ${hs}`);
+      el._shape.innerHTML = key ? shapeSVG(e.shape, ws, hs) : "";
+    }
+    return { ws, hs };
   }
 
   focusAt(nx, ny) {
@@ -701,10 +834,9 @@ export class MapView {
       const p = this.toNorm(e.clientX, e.clientY, true);
       d.x = p.x; d.y = p.y;
       const ent = this.ents.find((x) => x.id === d.id);
-      const s = this.persp() ? this.cellSizeAt(p.x, p.y) * (ent?.size || 1) : parseFloat(d.el.style.width);
-      if (this.persp()) { d.el.style.setProperty("--s", s + "px"); d.el.style.width = d.el.style.height = s + "px"; }
-      d.el.style.left = p.x * this.dim.w - s / 2 + "px";
-      d.el.style.top = p.y * this.dim.h - s / 2 + "px";
+      if (ent && this.persp()) this.sizeToken(d.el, ent, p.x, p.y);   // tokens shrink toward the horizon as they're dragged
+      d.el.style.left = p.x * this.dim.w - parseFloat(d.el.style.width) / 2 + "px";
+      d.el.style.top = p.y * this.dim.h - parseFloat(d.el.style.height) / 2 + "px";
       this.cb.onMove?.(d.id, p.x, p.y);
       return;
     }

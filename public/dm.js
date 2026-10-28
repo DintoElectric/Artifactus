@@ -1,4 +1,4 @@
-import { call, uid, esc, clamp, TYPES, MapView, pingColor, PING_TTL, defaultPersp } from "./common.js";
+import { call, uid, esc, clamp, TYPES, OBJECT_ICONS, OBJECT_SHAPES, OBJECT_TINTS, OBJECT_PRESETS, STRUCT_SHAPES, MapView, pingColor, PING_TTL, defaultPersp } from "./common.js";
 import { mountRoller } from "./dice.js";
 import { SheetStore, mountBook, mountNotes, blankSheet } from "./sheet.js";
 import { Library, parseSpells } from "./library.js";
@@ -342,31 +342,41 @@ $("#typeSeg").addEventListener("click", (e) => {
   if (!b) return;
   newType = b.dataset.type;
   $("#typeSeg").querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", x === b));
+  $("#objKind").hidden = newType !== "object";
+  $("#tokName").placeholder = newType === "object" ? "Name (or leave blank to use the object's name)" : "Name";
 });
+$("#objKind").innerHTML = OBJECT_PRESETS.map(([group, items], gi) =>
+  `<optgroup label="${esc(group)}">${items.map(([label, icon, , w, h], ii) => `<option value="${gi}:${ii}">${icon ? icon + "  " : ""}${esc(label)} (${w}×${h})</option>`).join("")}</optgroup>`).join("");
+const presetFor = (value) => { const [g, i] = String(value).split(":").map(Number); return OBJECT_PRESETS[g]?.[1][i] || OBJECT_PRESETS[4][1][1]; };
 
 $("#addForm").addEventListener("submit", (e) => {
   e.preventDefault();
-  const name = $("#tokName").value.trim();
+  const preset = newType === "object" ? presetFor($("#objKind").value) : null;
+  const name = $("#tokName").value.trim() || (preset ? preset[0] : "");
   const count = clamp(parseInt($("#tokCount2").value) || 1, 1, 20);
   if (!name) { toast("Give the token a name."); return; }
-  addTokens(name, newType, count);
+  addTokens(name, newType, count, preset);
   $("#tokName").value = "";
   $("#tokCount2").value = 1;
 });
 
-function addTokens(name, type, count) {
+function addTokens(name, type, count, preset) {
   const c = mv.centerPoint() || { x: 0.5, y: 0.5 };
   const w = state.mapW || 1, h = state.mapH || 1, g = mv.cellSizeAt(c.x, c.y);
+  const [, icon, shape, pw, ph, tint] = preset || [];
   for (let i = 0; i < count; i++) {
+    // a row of copies, spaced by the object's own size so big ones don't pile up
+    const stepX = g * 1.1 * (type === "object" ? Math.max(pw, 1) : 1), stepY = g * 1.1 * (type === "object" ? Math.max(ph, 1) : 1);
     const ox = count > 1 ? (i % 4) - 1.5 : 0;
     const e = {
       id: uid(),
       name: count > 1 ? `${name} ${i + 1}` : name,
       type,
-      x: clamp(c.x + (ox * g * 1.1) / w, 0, 1),
-      y: clamp(c.y + (Math.floor(i / 4) * g * 1.1) / h, 0, 1),
+      x: clamp(c.x + (ox * stepX) / w, 0, 1),
+      y: clamp(c.y + (Math.floor(i / 4) * stepY) / h, 0, 1),
       size: 1, hp: null, maxHp: null, hidden: false, down: false,
     };
+    if (type === "object") Object.assign(e, { icon, shape, w: pw, h: ph, rot: 0, tint, labelIn: STRUCT_SHAPES.has(shape) });
     state.ents.push(e);
     if (type === "pc") state.inv[e.id] = [];
   }
@@ -391,8 +401,29 @@ function editToken(id) {
       <div class="field"><label for="f_name">Name</label><input id="f_name" name="name" type="text" value="${esc(e.name)}" maxlength="40" required></div>
       <div class="field"><label for="f_type">Type</label><select id="f_type" name="type">
         ${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${e.type === k ? "selected" : ""}>${v.label}</option>`).join("")}</select></div>
-      <div class="field"><label for="f_size">Size</label><select id="f_size" name="size">
+      <div class="field" data-grp="people"><label for="f_size">Size</label><select id="f_size" name="size">
         ${sizes.map(([v, l]) => `<option value="${v}" ${(e.size || 1) === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+      <div data-grp="object">
+        <div class="row">
+          <div class="field"><label for="f_shape">Shape</label><select id="f_shape" name="shape">
+            ${OBJECT_SHAPES.map(([k, l]) => `<option value="${k}" ${(e.shape || "box") === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+          <div class="field"><label for="f_tint">Colour</label><select id="f_tint" name="tint">
+            ${OBJECT_TINTS.map(([k, l]) => `<option value="${k}" ${(e.tint || "") === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+        </div>
+        <div class="field"><label for="f_icon">Picture (optional)</label><select id="f_icon" name="icon">
+          <option value="" ${(e.icon ?? "📦") === "" ? "selected" : ""}>None</option>
+          ${OBJECT_ICONS.map(([icon, label]) => `<option value="${icon}" ${(e.icon ?? "📦") === icon ? "selected" : ""}>${icon}  ${esc(label)}</option>`).join("")}</select></div>
+        <div class="row">
+          <div class="field"><label for="f_w">Width (squares)</label><input id="f_w" name="w" type="number" min="0.25" max="12" step="0.25" value="${e.w || 1}"></div>
+          <div class="field"><label for="f_h">Height (squares)</label><input id="f_h" name="h" type="number" min="0.25" max="12" step="0.25" value="${e.h || 1}"></div>
+        </div>
+        <div class="row" style="align-items:flex-end">
+          <div class="field"><label for="f_rot">Turn (degrees)</label><input id="f_rot" name="rot" type="number" min="0" max="359" step="15" value="${Math.round(e.rot || 0) % 360}"></div>
+          <button type="button" class="btn small" data-turn style="margin-bottom:.75rem">Turn 90°</button>
+        </div>
+        <label class="check field"><input type="checkbox" name="labelIn" ${(e.labelIn ?? STRUCT_SHAPES.has(e.shape)) ? "checked" : ""}> Show the name inside</label>
+        <label class="check field"><input type="checkbox" name="noLabel" ${e.noLabel ? "checked" : ""}> Hide the name on the map</label>
+      </div>
       <div class="row">
         <div class="field"><label for="f_hp">HP</label><input id="f_hp" name="hp" type="number" value="${e.hp ?? ""}"></div>
         <div class="field"><label for="f_mhp">Max HP</label><input id="f_mhp" name="maxHp" type="number" value="${e.maxHp ?? ""}"></div>
@@ -400,7 +431,7 @@ function editToken(id) {
       <div class="field"><label for="f_img">Token image</label><input id="f_img" name="image" type="file" accept="image/*"></div>
       ${e.img ? '<label class="check field"><input type="checkbox" name="rmimg"> Remove current image</label>' : ""}
       <label class="check field"><input type="checkbox" name="hidden" ${e.hidden ? "checked" : ""}> Hidden from players</label>
-      <label class="check field"><input type="checkbox" name="down" ${e.down ? "checked" : ""}> Down / dead</label>
+      <label class="check field"><input type="checkbox" name="down" ${e.down ? "checked" : ""}> Down / dead / destroyed</label>
       <div class="dlg-actions">
         <button type="button" class="btn danger push" data-delete>Delete token</button>
         <button type="button" class="btn" data-close>Cancel</button>
@@ -411,7 +442,17 @@ function editToken(id) {
       const wasPc = e.type === "pc";
       e.name = d.name.trim() || e.name;
       e.type = d.type;
-      e.size = Number(d.size) || 1;
+      e.size = Number(d.size) || e.size || 1;
+      if (e.type === "object") {
+        e.icon = d.icon ?? "";
+        e.shape = d.shape || "box";
+        e.tint = d.tint || "";
+        e.labelIn = d.labelIn === "on";
+        e.w = clamp(Number(d.w) || 1, 0.25, 12);
+        e.h = clamp(Number(d.h) || 1, 0.25, 12);
+        e.rot = (((Math.round(Number(d.rot)) || 0) % 360) + 360) % 360;
+        e.noLabel = d.noLabel === "on";
+      }
       e.hp = d.hp === "" ? null : Number(d.hp);
       e.maxHp = d.maxHp === "" ? null : Number(d.maxHp);
       e.hidden = d.hidden === "on";
@@ -424,11 +465,25 @@ function editToken(id) {
       changed();
       if (file) uploadTokenImage(e, file);
     },
-    (root) => root.querySelector("[data-delete]").addEventListener("click", () => {
-      if (!confirm(`Delete ${e.name}?`)) return;
-      deleteToken(e.id);
-      dlg.close();
-    }));
+    (root) => {
+      // Show the size box for people, or the picture / size / turn boxes for objects.
+      const sync = () => {
+        const obj = root.querySelector("#f_type").value === "object";
+        root.querySelector('[data-grp="object"]').hidden = !obj;
+        root.querySelector('[data-grp="people"]').hidden = obj;
+      };
+      root.querySelector("#f_type").addEventListener("change", sync);
+      sync();
+      root.querySelector("[data-turn]").addEventListener("click", () => {
+        const r = root.querySelector("#f_rot");
+        r.value = (((Math.round(Number(r.value)) || 0) + 90) % 360);
+      });
+      root.querySelector("[data-delete]").addEventListener("click", () => {
+        if (!confirm(`Delete ${e.name}?`)) return;
+        deleteToken(e.id);
+        dlg.close();
+      });
+    });
 }
 
 async function squareImage(file, size = 192) {
@@ -585,7 +640,7 @@ $("#rollBtn").onclick = () => {
   sortInit();
   changed();
 };
-$("#addAllBtn").onclick = () => { state.ents.forEach((e) => addToInit(e.id)); changed(); };
+$("#addAllBtn").onclick = () => { state.ents.filter((e) => e.type !== "object").forEach((e) => addToInit(e.id)); changed(); };
 $("#startBtn").onclick = () => {
   const I = state.init;
   if (I.on) { I.on = false; I.turnId = null; }
@@ -620,9 +675,11 @@ function renderTokens() {
   $("#tokList").innerHTML = state.ents.map((e) => {
     const inInit = state.init.list.some((i) => i.id === e.id);
     return `<li class="trow ${selId === e.id ? "sel" : ""} ${e.down ? "down" : ""}" data-id="${e.id}">
-      <span class="dot" style="--c:${TYPES[e.type].color}"></span>
+      ${e.type === "object" && (e.icon ?? "📦") ? `<span class="oicon" aria-hidden="true">${esc(e.icon ?? "📦")}</span>`
+        : `<span class="dot" style="--c:${(e.type === "object" && e.tint) || TYPES[e.type].color}"></span>`}
       <button class="tname" data-act="focus">${esc(e.name)}</button>
       <button class="btn small ghost" data-act="vis" aria-pressed="${!!e.hidden}">${e.hidden ? "Hidden" : "Visible"}</button>
+      ${e.type === "object" ? `<button class="btn small ghost" data-act="rot" aria-label="Turn ${esc(e.name)} 90 degrees" title="Turn 90°">↻</button>` : ""}
       <button class="btn small ghost" data-act="init" aria-pressed="${inInit}">Init</button>
       <button class="btn small ghost" data-act="edit">Edit</button>
     </li>`;
@@ -638,6 +695,7 @@ $("#tokList").addEventListener("click", (ev) => {
   switch (b.dataset.act) {
     case "focus": select(id); mv.focus(id); break;
     case "vis": e.hidden = !e.hidden; changed(); break;
+    case "rot": e.rot = (((Math.round(e.rot) || 0) + 90) % 360); changed(); break;
     case "init":
       if (state.init.list.some((i) => i.id === id)) removeFromInit(id, true);
       else { addToInit(id); changed(); }

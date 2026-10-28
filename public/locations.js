@@ -275,6 +275,7 @@ export function mountLocations(root, ctx) {
           <label class="check"><input type="checkbox" name="pc" checked> Player characters</label>
           <label class="check"><input type="checkbox" name="npc"> NPCs</label>
           <label class="check"><input type="checkbox" name="enemy"> Enemies</label>
+          <label class="check"><input type="checkbox" name="object"> Objects</label>
         </fieldset>
         <p class="hint" style="margin:0 0 .6rem">Tokens that were at ${esc(target.name)} before go back to where you left them. Others that aren't brought along are hidden there.</p>
         <label class="check" style="margin-bottom:.4rem"><input type="checkbox" name="hide"> Hide the map from players until I turn it back on</label>
@@ -285,7 +286,7 @@ export function mountLocations(root, ctx) {
       </form>`,
       (f) => {
         dlg.close();
-        switchTo(id, { bring: { pc: f.get("pc") === "on", npc: f.get("npc") === "on", enemy: f.get("enemy") === "on" }, hideMap: f.get("hide") === "on" });
+        switchTo(id, { bring: { pc: f.get("pc") === "on", npc: f.get("npc") === "on", enemy: f.get("enemy") === "on", object: f.get("object") === "on" }, hideMap: f.get("hide") === "on" });
       });
   }
 

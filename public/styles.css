@@ -495,3 +495,26 @@ dialog h2{margin-bottom:1rem}
 .atkbtns{grid-column:1/-1;display:flex;gap:.4rem;align-items:center}
 .skill .rollbtn{min-width:3.6rem}
 .cstats .rollbtn{margin-top:.1rem}
+
+/* ---------- object tokens (chests, doors, traps...) ---------- */
+.tok-name{font-size:calc(var(--ls,var(--s))*.27)}
+.tok.obj{border-radius:18%}
+.tok.obj .tok-img{border-radius:18%}
+.tok.obj .tok-face{font-size:calc(var(--s)*.56);transform:rotate(calc(var(--rot,0deg)*-1));color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.45);
+  font-family:"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",system-ui,sans-serif}
+.tok.obj .tok-name{top:50%;left:50%;margin-top:0;transform-origin:0 0;transform:rotate(calc(var(--rot,0deg)*-1)) translate(-50%,var(--ly,60%))}
+.tok.obj.turn::after{border-radius:26%}
+.tok.nolabel .tok-name{display:none}
+.oicon{width:1rem;text-align:center;font-size:1rem;flex:none;font-family:"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",system-ui,sans-serif}
+.trow{flex-wrap:wrap}
+
+/* ---------- footprint shapes: boats, houses, tents ---------- */
+.tok-shape{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none;display:none}
+.tok.struct .tok-shape{display:block}
+.tok.struct{background:none;box-shadow:none;border-radius:0}
+.tok-shape .body{fill:color-mix(in srgb,var(--c) 42%,transparent);stroke:color-mix(in srgb,var(--c) 78%,#fff)}
+.tok-shape .det{fill:none;stroke:color-mix(in srgb,var(--c) 55%,#000)}
+.tok.obj.round,.tok.obj.round .tok-img{border-radius:50%}
+.tok.struct .tok-img{border-radius:0}
+.tok.struct.turn::after{border-radius:6%}
+.tok.obj.inside .tok-name{transform:rotate(calc(var(--rot,0deg)*-1)) translate(-50%,-50%)}
