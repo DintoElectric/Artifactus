@@ -124,6 +124,7 @@ const MAX_MAP = 4.6 * KB * KB;
 const MAX_FOG = 600 * KB;
 const MAX_IMG = 400 * KB;
 const MAX_THUMB = 150 * KB;
+const MAX_VIDEO = 4 * KB * KB;   // a looping video map; the hosting platform limits a request to about 6 MB once encoded for transfer
 
 /* Roll feed. Each roll is its own blob whose KEY carries the data, so one list call reads
    the whole feed and two rolls at the same moment can never overwrite each other. */
@@ -320,6 +321,7 @@ function cleanLocs(d) {
       name: str(l?.name, 80).trim() || "Untitled",
       notes: str(l?.notes, 1500),
       mapRev: num(l?.mapRev, 0, 9e15, 0), mapW: num(l?.mapW, 0, 20000, 0), mapH: num(l?.mapH, 0, 20000, 0),
+      mapKind: l?.mapKind === "video" ? "video" : "",
       thumbRev: num(l?.thumbRev, 0, 9e15, 0),
       grid: cleanGrid(l?.grid),
       fog: { on: !!l?.fog?.on, rev: num(l?.fog?.rev, 0, 9e15, 0) },
@@ -329,13 +331,20 @@ function cleanLocs(d) {
   return { locations };
 }
 
-const imageResponse = (r, fallbackType) =>
-  new Response(r.data, {
-    headers: {
-      "content-type": r.metadata?.type || fallbackType,
-      "cache-control": "private, max-age=31536000, immutable",
-    },
+/* Serves a stored file. Videos need "range" support (asking for part of the file): iPhones won't play a video without it. */
+function fileResponse(req, r, fallbackType) {
+  const data = r.data, total = data.byteLength;
+  const base = { "content-type": r.metadata?.type || fallbackType, "accept-ranges": "bytes", "cache-control": "private, max-age=31536000, immutable" };
+  const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.get("range") || "");
+  if (!m || (m[1] === "" && m[2] === "")) return new Response(data, { headers: { ...base, "content-length": String(total) } });
+  const start = m[1] === "" ? Math.max(0, total - Number(m[2])) : Number(m[1]);
+  const end = m[1] === "" || m[2] === "" ? total - 1 : Math.min(Number(m[2]), total - 1);
+  if (!(start <= end) || start >= total) return new Response(null, { status: 416, headers: { "content-range": `bytes */${total}` } });
+  return new Response(data.slice(start, end + 1), {
+    status: 206,
+    headers: { ...base, "content-range": `bytes ${start}-${end}/${total}`, "content-length": String(end - start + 1) },
   });
+}
 
 export default async (req) => {
   const store = getStore({ name: "dm-tables", consistency: "strong" });
@@ -618,7 +627,7 @@ export default async (req) => {
     // location thumbnails, and token images.
     const sid = cleanId(rawId);
     const assets = {
-      map: { key: sid ? `map/${room}/${sid}` : `map/${room}`, max: MAX_MAP, type: /^image\// , fallback: "image/jpeg" },
+      map: { key: sid ? `map/${room}/${sid}` : `map/${room}`, max: MAX_MAP, type: /^(image\/|video\/(mp4|webm)\b)/, fallback: "image/jpeg" },
       fog: { key: sid ? `fog/${room}/${sid}` : `fog/${room}`, max: MAX_FOG, type: /^image\/png/, fallback: "image/png" },
       thumb: { key: `thumb/${room}/${sid}`, max: MAX_THUMB, type: /^image\//, fallback: "image/jpeg" },
       img: { key: `img/${room}/${sid}`, max: MAX_IMG, type: /^image\//, fallback: "image/jpeg" },
@@ -629,7 +638,7 @@ export default async (req) => {
       if (req.method === "GET") {
         const r = await store.getWithMetadata(assets.key, { type: "arrayBuffer" });
         if (!r) return fail(404, "Not found.");
-        return imageResponse(r, assets.fallback);
+        return fileResponse(req, r, assets.fallback);
       }
       if (req.method === "PUT") {
         const denied = await dmOnly();
@@ -637,7 +646,7 @@ export default async (req) => {
         const type = req.headers.get("content-type") || "";
         if (!assets.type.test(type)) return fail(400, "Wrong file type.");
         const buf = await req.arrayBuffer();
-        if (buf.byteLength > assets.max) return fail(413, "That file is too large.");
+        if (buf.byteLength > (type.startsWith("video/") ? MAX_VIDEO : assets.max)) return fail(413, "That file is too large.");
         await store.set(assets.key, buf, { metadata: { type } });
         return reply({ ok: true });
       }

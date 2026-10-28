@@ -130,7 +130,7 @@ function mapSrc() {
 }
 
 function renderMap() {
-  mv.setMap(`${state.locId}:${state.mapRev}`, mapSrc());
+  mv.setMap(`${state.locId}:${state.mapRev}`, mapSrc(), undefined, state.mapKind);
   mv.update({
     ents: state.ents,
     grid: state.grid,

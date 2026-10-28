@@ -242,15 +242,17 @@ export class MapView {
     this.empty = root.querySelector(".mv-empty");
     this.empty.textContent = opts.emptyText || "No map loaded";
 
-    this.img.addEventListener("load", () => {
-      this.dim = { w: this.img.naturalWidth, h: this.img.naturalHeight };
-      this.world.style.width = this.dim.w + "px";
-      this.world.style.height = this.dim.h + "px";
-      if (this.fitPending) { this.fit(); this.fitPending = false; }
-      this.render();
-      this.applyFog(true);
-      this.cb.onDims?.(this.dim);
-    });
+    // The map can also be a looping video. It sits where the picture does, so the grid, fog and tokens work the same.
+    this.vid = document.createElement("video");
+    this.vid.className = "mv-img mv-vid";
+    this.vid.muted = true; this.vid.loop = true; this.vid.autoplay = true; this.vid.playsInline = true;
+    this.vid.preload = "auto"; this.vid.disablePictureInPicture = true; this.vid.draggable = false;
+    for (const a of ["muted", "loop", "autoplay", "playsinline", "webkit-playsinline"]) this.vid.setAttribute(a, "");
+    this.vid.style.display = "none";
+    this.img.after(this.vid);
+    this.vid.addEventListener("loadedmetadata", () => this.mediaReady(this.vid.videoWidth, this.vid.videoHeight));
+    this.vid.addEventListener("error", () => this.cb.onMediaError?.("video"));
+    this.img.addEventListener("load", () => this.mediaReady(this.img.naturalWidth, this.img.naturalHeight));
 
     root.addEventListener("pointerdown", (e) => this.down(e));
     root.addEventListener("pointermove", (e) => this.move(e));
@@ -270,11 +272,37 @@ export class MapView {
     new ResizeObserver(() => { if (this.autoFit) this.fit(); }).observe(root);
   }
 
-  setMap(key, src, emptyText) {
+  /* The picture or video has loaded and we know how big it is. */
+  mediaReady(w, h) {
+    this.dim = { w, h };
+    this.world.style.width = w + "px";
+    this.world.style.height = h + "px";
+    if (this.fitPending) { this.fit(); this.fitPending = false; }
+    this.render();
+    this.applyFog(true);
+    this.cb.onDims?.(this.dim);
+  }
+
+  /* Start the video. Some phones won't autoplay (low-power mode): then the first tap starts it. */
+  playVideo() {
+    const p = this.vid.play?.();
+    if (p && p.catch) p.catch(() => {
+      this.root.addEventListener("pointerdown", () => this.vid.play?.().catch(() => {}), { once: true });
+    });
+  }
+
+  stopVideo() {
+    this.vid.pause?.();
+    this.vid.removeAttribute("src");
+    this.vid.load?.();
+  }
+
+  setMap(key, src, emptyText, kind) {
     if (emptyText) this.empty.textContent = emptyText;
     if (!src) {
       this.key = null;
       this.img.removeAttribute("src");
+      this.stopVideo();
       this.dim = { w: 0, h: 0 };
       this.world.style.display = "none";
       this.empty.style.display = "grid";
@@ -286,7 +314,18 @@ export class MapView {
     this.key = key;
     this.autoFit = true;
     this.fitPending = true;
-    this.img.src = src;
+    if (kind === "video") {
+      this.img.removeAttribute("src");
+      this.img.style.display = "none";
+      this.vid.style.display = "block";
+      this.vid.src = src;
+      this.playVideo();
+    } else {
+      this.stopVideo();
+      this.vid.style.display = "none";
+      this.img.style.display = "block";
+      this.img.src = src;
+    }
   }
 
   update({ ents, grid, turnId, selId }) {

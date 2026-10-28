@@ -296,7 +296,7 @@ function render() {
   const I = st.init;
   const showMap = st.mapOn && st.mapRev;
   const lp = st.locId ? "/" + st.locId : "";   // saved locations have their own map and fog files
-  if (showMap) mv.setMap(`${st.locId || ""}:${st.mapRev}`, `/api/map/${room}${lp}?v=${st.mapRev}`);
+  if (showMap) mv.setMap(`${st.locId || ""}:${st.mapRev}`, `/api/map/${room}${lp}?v=${st.mapRev}`, undefined, st.mapKind);
   else mv.setMap(null, null, EMPTY_MAP);
   const fog = st.fog || { on: false, rev: 0 };
   mv.setFog(showMap && fog.on, `${st.locId || ""}:${fog.rev}`, fog.rev ? `/api/fog/${room}${lp}?v=${fog.rev}` : null);

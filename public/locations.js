@@ -1,5 +1,5 @@
 import { call, esc, uid, clamp } from "./common.js";
-import { compressMap, makeThumb } from "./images.js";
+import { compressMap, makeThumb, MAP_ACCEPT } from "./images.js";
 
 /* Saved locations. Each location remembers its map image, grid settings, fog, and where every token
    stood, so moving the party is "pick a location", not "upload and set everything up again".
@@ -16,7 +16,7 @@ export const defaultGrid = (w, h) => ({
 export function snapshotOf(state) {
   const tokens = {};
   for (const e of state.ents) tokens[e.id] = { x: e.x, y: e.y, hidden: !!e.hidden };
-  return { mapRev: state.mapRev, mapW: state.mapW, mapH: state.mapH, grid: clone(state.grid), fog: { on: !!state.fog.on, rev: state.fog.rev }, tokens };
+  return { mapRev: state.mapRev, mapW: state.mapW, mapH: state.mapH, mapKind: state.mapKind || "", grid: clone(state.grid), fog: { on: !!state.fog.on, rev: state.fog.rev }, tokens };
 }
 
 /* Put a location's map, grid and fog onto the live table. */
@@ -26,6 +26,7 @@ export function applyMap(state, loc) {
   state.mapRev = loc.mapRev;
   state.mapW = loc.mapW;
   state.mapH = loc.mapH;
+  state.mapKind = loc.mapKind === "video" ? "video" : "";
   state.grid = { ...defaultGrid(loc.mapW, loc.mapH), ...clone(loc.grid) };
   state.fog = { on: !!loc.fog?.on, rev: loc.fog?.rev || 0 };
 }
@@ -149,7 +150,7 @@ export function mountLocations(root, ctx) {
   const card = (l, isActive) => `
     <li class="loccard ${isActive ? "on" : ""}" data-id="${l.id}">
       <div class="locthumb">${l.thumbRev ? `<img src="${thumbUrl(l)}" alt="" loading="lazy">` : '<span class="hint">No preview</span>'}
-        ${isActive ? '<span class="badge">Showing now</span>' : ""}</div>
+        ${isActive ? '<span class="badge">Showing now</span>' : ""}${l.mapKind === "video" ? '<span class="badge vid">▶ Video</span>' : ""}</div>
       <div class="locinfo">
         <h3>${esc(l.name)}</h3>
         ${l.notes ? `<p>${esc(l.notes.length > 110 ? l.notes.slice(0, 110) + "…" : l.notes)}</p>` : ""}
@@ -162,23 +163,23 @@ export function mountLocations(root, ctx) {
 
   /* ----- uploading maps ----- */
   async function uploadFiles(id, file) {
-    const { blob, w, h } = await imgs.compressMap(file);
-    const thumb = await imgs.makeThumb(blob);
+    const { blob, w, h, kind, thumb: still } = await imgs.compressMap(file);
+    const thumb = still || (await imgs.makeThumb(blob));   // a video's preview is its first picture
     await call(`map/${room}/${id}`, { method: "PUT", body: blob, pin });
     await call(`thumb/${room}/${id}`, { method: "PUT", body: thumb, pin });
     const rev = Date.now();
     localUrls.set(id, { rev, url: URL.createObjectURL(blob) });
-    return { rev, w, h };
+    return { rev, w, h, mapKind: kind === "video" ? "video" : "" };
   }
 
   async function createLocation({ name, notes, file }) {
     ctx.setSync("Uploading map…");
     try {
       const id = uid();
-      const { rev, w, h } = await uploadFiles(id, file);
-      const loc = { id, name, notes, mapRev: rev, mapW: w, mapH: h, thumbRev: rev, grid: defaultGrid(w, h), fog: { on: false, rev: 0 }, tokens: {} };
+      const { rev, w, h, mapKind } = await uploadFiles(id, file);
+      const loc = { id, name, notes, mapRev: rev, mapW: w, mapH: h, mapKind, thumbRev: rev, grid: defaultGrid(w, h), fog: { on: false, rev: 0 }, tokens: {} };
       doc.locations.push(loc);
-      keys.set(id, JSON.stringify(snapshotOf({ ...S(), ...{ mapRev: rev, mapW: w, mapH: h, grid: loc.grid, fog: loc.fog, ents: [] } })));
+      keys.set(id, JSON.stringify(snapshotOf({ ...S(), ...{ mapRev: rev, mapW: w, mapH: h, mapKind, grid: loc.grid, fog: loc.fog, ents: [] } })));
       await saveDoc();
       render();
       ctx.setSync("Saved");
@@ -194,8 +195,8 @@ export function mountLocations(root, ctx) {
     const loc = byId(id);
     ctx.setSync("Uploading map…");
     try {
-      const { rev, w, h } = await uploadFiles(id, file);
-      Object.assign(loc, { mapRev: rev, mapW: w, mapH: h, thumbRev: rev, fog: { on: loc.fog.on, rev: 0 } });
+      const { rev, w, h, mapKind } = await uploadFiles(id, file);
+      Object.assign(loc, { mapRev: rev, mapW: w, mapH: h, mapKind, thumbRev: rev, fog: { on: loc.fog.on, rev: 0 } });
       loc.grid = { ...loc.grid, size: defaultGrid(w, h).size, areas: [] };
       if (S().locId === id) {
         applyMap(S(), loc);
@@ -295,7 +296,8 @@ export function mountLocations(root, ctx) {
       <form>
         <h2>Add a location</h2>
         <label class="cf" style="margin-bottom:.7rem"><span>Name</span><input type="text" name="name" maxlength="80" placeholder="The Rusty Anchor" required autofocus></label>
-        <label class="cf" style="margin-bottom:.7rem"><span>Map image</span><input type="file" name="file" accept="image/*" required></label>
+        <label class="cf" style="margin-bottom:.7rem"><span>Map image or video loop</span><input type="file" name="file" accept="${MAP_ACCEPT}" required>
+          <small class="hint">A video should be a short MP4 or WebM loop under 4 MB. It plays silently and repeats.</small></label>
         <label class="cf" style="margin-bottom:.7rem"><span>Notes (optional)</span><textarea name="notes" rows="3" maxlength="1500" placeholder="What's here, secrets, who to meet"></textarea></label>
         <label class="check"><input type="checkbox" name="go" checked> Go there when it's saved</label>
         <div class="dlg-actions">
@@ -322,7 +324,7 @@ export function mountLocations(root, ctx) {
         <h2>Edit location</h2>
         <label class="cf" style="margin-bottom:.7rem"><span>Name</span><input type="text" name="name" maxlength="80" value="${esc(loc.name)}" required></label>
         <label class="cf" style="margin-bottom:.7rem"><span>Notes</span><textarea name="notes" rows="3" maxlength="1500">${esc(loc.notes)}</textarea></label>
-        <label class="cf" style="margin-bottom:.4rem"><span>Replace the map image (resets the grid size and clears the fog)</span><input type="file" name="file" accept="image/*"></label>
+        <label class="cf" style="margin-bottom:.4rem"><span>Replace the map (resets the grid size and clears the fog)</span><input type="file" name="file" accept="${MAP_ACCEPT}"></label>
         <div class="dlg-actions">
           <button type="button" class="btn danger push" data-delete>Delete</button>
           <button type="button" class="btn" data-close>Cancel</button>
@@ -421,7 +423,7 @@ export function mountLocations(root, ctx) {
     try {
       doc = (await call(`locs/${room}`, { pin })).doc;
       loadFailed = false;
-      for (const l of doc.locations) keys.set(l.id, JSON.stringify({ mapRev: l.mapRev, mapW: l.mapW, mapH: l.mapH, grid: l.grid, fog: l.fog, tokens: l.tokens }));
+      for (const l of doc.locations) keys.set(l.id, JSON.stringify({ mapRev: l.mapRev, mapW: l.mapW, mapH: l.mapH, mapKind: l.mapKind || "", grid: l.grid, fog: l.fog, tokens: l.tokens }));
     } catch (err) {
       doc = null; loadFailed = true;
       ctx.toast?.("Could not load your locations: " + err.message);

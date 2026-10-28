@@ -518,3 +518,7 @@ dialog h2{margin-bottom:1rem}
 .tok.struct .tok-img{border-radius:0}
 .tok.struct.turn::after{border-radius:6%}
 .tok.obj.inside .tok-name{transform:rotate(calc(var(--rot,0deg)*-1)) translate(-50%,-50%)}
+
+/* ---------- video maps ---------- */
+.mv-vid{background:#000}
+.locthumb .badge.vid{left:auto;right:.5rem;background:rgba(10,13,20,.85);color:var(--text)}
