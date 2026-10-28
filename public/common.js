@@ -269,7 +269,20 @@ export class MapView {
       const r = root.getBoundingClientRect();
       this.zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.0015));
     }, { passive: false });
-    new ResizeObserver(() => { if (this.autoFit) this.fit(); }).observe(root);
+    this.watchSize(window);
+  }
+
+  /* Refit the map whenever its box changes size. When the map moves into another window, call this again with that
+     window so the resizing is noticed there. */
+  watchSize(win) {
+    this.ro?.disconnect?.();
+    if (this._winResize && this._winOf) this._winOf.removeEventListener("resize", this._winResize);
+    const RO = win.ResizeObserver || ResizeObserver;
+    this.ro = new RO(() => { if (this.autoFit) this.fit(); });
+    this.ro.observe(this.root);
+    this._winResize = () => { if (this.autoFit) this.fit(); };
+    this._winOf = win;
+    win.addEventListener("resize", this._winResize);
   }
 
   /* The picture or video has loaded and we know how big it is. */

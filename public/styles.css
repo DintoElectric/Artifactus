@@ -522,3 +522,23 @@ dialog h2{margin-bottom:1rem}
 /* ---------- video maps ---------- */
 .mv-vid{background:#000}
 .locthumb .badge.vid{left:auto;right:.5rem;background:rgba(10,13,20,.85);color:var(--text)}
+
+/* ---------- the map on a second screen ---------- */
+html.popwin,html.popwin body{height:100%;margin:0}
+.popbody{display:flex;flex-direction:column;height:100dvh;background:var(--ink)}
+.popbar{display:flex;align-items:center;gap:.5rem;padding:.35rem .7rem;background:var(--panel);border-bottom:1px solid var(--line)}
+.popbar .grow{flex:1}
+.poproot{flex:1;min-height:0;display:flex;flex-direction:column;position:relative}
+.poproot>.pane,.poproot>.mapwrap{flex:1;min-height:0}
+:fullscreen .popbar{display:none}
+.poppednote{margin:auto;max-width:34rem;padding:2rem;text-align:center;display:grid;gap:1rem;justify-items:center}
+.poppednote p{margin:0;color:var(--mute)}
+#mapPlaceholder{display:flex}
+#mapPlaceholder[hidden]{display:none}
+
+/* with the map on another screen, the panels get the whole window */
+.pview.split .sheet,.pview.split .sheet.tall{position:static;max-height:none;border-radius:0;border-top:0;box-shadow:none;min-height:0}
+.pview.split #sheetClose{display:none}
+.popbanner{position:absolute;left:.7rem;top:.7rem;z-index:6;background:rgba(10,13,20,.88);border:1px solid var(--line);border-radius:10px;padding:.3rem .8rem;
+  font-family:var(--serif);font-size:1.3rem}
+.popbanner.me{border-color:var(--brass);color:var(--brass);font-weight:700}

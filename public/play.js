@@ -1,11 +1,14 @@
 import { call, esc, TYPES, MapView, uid, pingColor, PING_TTL, getAccount } from "./common.js";
+import { openPopout } from "./popout.js";
 import { mountRoller, rand } from "./dice.js";
 import { SheetStore, mountBook, mountNotes } from "./sheet.js";
 import { mountChar } from "./charsheet.js";
 import { Library } from "./library.js";
 import { CAMPAIGN_FIELDS, SESSION_FIELDS, prettyDate } from "./campaign.js";
 
-const $ = (s) => document.querySelector(s);
+let popDoc = null;   // the map window's page, while the map is on another screen
+// Looks in this page first, then in the map window, so every control keeps working wherever it is.
+const $ = (s) => document.querySelector(s) || popDoc?.querySelector(s) || null;
 const params = new URLSearchParams(location.search);
 const room = (params.get("room") || "").toUpperCase();
 if (!room) { location.replace("/"); throw new Error("No table"); }
@@ -307,6 +310,8 @@ function render() {
   const banner = $("#banner");
   banner.classList.toggle("me", !!turn && turn.id === me);
   banner.textContent = !I.on ? st.locName || "" : turn ? (turn.id === me ? "Your turn" : `Round ${I.round} · ${turn.name}`) : `Round ${I.round}`;
+  const over = $("#popBanner");
+  if (over) { over.textContent = banner.textContent; over.classList.toggle("me", banner.classList.contains("me")); over.hidden = !banner.textContent; }
   renderFeed();
   renderSheet(false);
   charUI?.refresh();
@@ -399,6 +404,7 @@ setInterval(() => {
 }, 5000);
 
 function renderSheet(force) {
+  if (!sheet && popCtl) sheet = me ? "char" : "init";   // with the map on another screen, this window always shows a panel
   const box = $("#sheet");
   document.querySelectorAll("[data-sheet]").forEach((b) => b.setAttribute("aria-pressed", b.dataset.sheet === sheet));
   if (!sheet) { box.hidden = true; return; }
@@ -551,11 +557,49 @@ $("#sheetBody").addEventListener("click", (e) => {
 
 document.querySelectorAll("[data-sheet]").forEach((b) =>
   b.addEventListener("click", () => {
-    sheet = sheet === b.dataset.sheet ? null : b.dataset.sheet;
+    sheet = sheet === b.dataset.sheet && !popCtl ? null : b.dataset.sheet;   // can't close the last panel when it fills the window
     initMsg = "";
     if (st) renderSheet(true);
   }));
-$("#sheetClose").onclick = () => { sheet = null; if (st) renderSheet(true); };
+$("#sheetClose").onclick = () => { if (popCtl) return; sheet = null; if (st) renderSheet(true); };
+/* ---------- the map on a second screen ---------- */
+let popCtl = null, popBusy = false;
+const mapWrap = document.getElementById("mapWrap");
+const pview = document.querySelector(".pview");
+if (window.matchMedia?.("(min-width: 900px)").matches) $("#popBtn").hidden = false;   // pointless on a phone
+
+async function popOutMap() {
+  if (popCtl) { popCtl.focus(); return; }
+  if (popBusy) return;
+  popBusy = true;
+  try {
+    const ctl = await openPopout({ el: mapWrap, name: `dmtable-play-${room}`, title: `Map · ${room}`, onClose: onPopClosed });
+    if (!ctl) { mapMsg("The map window didn't open. Allow pop-ups for this site, then try again.", 7000); return; }
+    popCtl = ctl;
+    popDoc = ctl.doc;
+    const over = document.createElement("div");   // whose turn it is, over the map
+    over.id = "popBanner"; over.className = "popbanner"; over.hidden = true;
+    mapWrap.appendChild(over);
+    pview.classList.add("split");
+    $("#popBtn").textContent = "Show map window";
+    mv.watchSize(ctl.win);
+    if (st) { render(); renderSheet(true); } else renderSheet(true);
+    mv.fit();
+  } finally { popBusy = false; }
+}
+
+function onPopClosed() {
+  popCtl = null;
+  popDoc = null;
+  document.getElementById("popBanner")?.remove();
+  pview.classList.remove("split");
+  $("#popBtn").textContent = "Map on 2nd screen";
+  mv.watchSize(window);
+  mv.fit();
+  if (st) renderSheet(true);
+}
+$("#popBtn").onclick = popOutMap;
+
 $("#fitBtn").onclick = () => mv.fit();
 updateWho();
 

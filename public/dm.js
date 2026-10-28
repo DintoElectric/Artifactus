@@ -2,11 +2,14 @@ import { call, uid, esc, clamp, TYPES, OBJECT_ICONS, OBJECT_SHAPES, OBJECT_TINTS
 import { mountRoller } from "./dice.js";
 import { SheetStore, mountBook, mountNotes, blankSheet } from "./sheet.js";
 import { Library, parseSpells } from "./library.js";
+import { openPopout } from "./popout.js";
 import { mountChar } from "./charsheet.js";
 import { mountCampaign } from "./campaign-ui.js";
 import { mountLocations } from "./locations.js";
 
-const $ = (s, r = document) => r.querySelector(s);
+let popDoc = null;   // the map window's page, while the map is on another screen
+// Looks in this page first, then in the map window, so every control keeps working wherever it is.
+const $ = (s, r) => (r ? r.querySelector(s) : document.querySelector(s) || popDoc?.querySelector(s) || null);
 const saved = JSON.parse(localStorage.getItem("dmTable") || "null");
 if (!saved) { location.replace("/"); throw new Error("No table"); }
 const { room, pin } = saved;
@@ -104,12 +107,18 @@ function toast(msg) {
   const t = $("#toast");
   t.textContent = msg; t.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (t.hidden = true), 3500);
+  toastTimer = setTimeout(() => { t.hidden = true; if (popDoc) { const p = popDoc.getElementById("popToast"); if (p) p.hidden = true; } }, 3500);
+  if (popDoc) {   // you may be looking at the map screen
+    let p = popDoc.getElementById("popToast");
+    if (!p) { p = popDoc.createElement("div"); p.id = "popToast"; p.className = "toast"; popDoc.body.appendChild(p); }
+    p.textContent = msg; p.hidden = false;
+  }
 }
 
 /* ---------- dialogs ---------- */
 const dlg = $("#dlg");
 function openDlg(html, onSubmit, onMount) {
+  if (popCtl) window.focus();   // dialogs open on the main screen, so bring that window forward
   dlg.innerHTML = html;
   const f = dlg.querySelector("form");
   f.addEventListener("submit", (e) => {
@@ -314,14 +323,63 @@ function setTab(t) {
   tab = t;
   for (const [k, [btn, pane]] of Object.entries(TABS)) {
     $("#" + btn).setAttribute("aria-selected", k === t);
-    $("#" + pane).hidden = k !== t;
+    const el = k === "map" && popCtl ? mapHolder : $("#" + pane);   // with the map on another screen, this tab shows a note
+    el.hidden = k !== t;
   }
+  if (popCtl) paneMap.hidden = false;   // over there the map is always showing
+  mapHolder.hidden = !(popCtl && t === "map");
   if (t === "inv") renderInv();
   if (t === "party") { renderParty(); pullSheets(); }
   if (t === "obj") renderObjectives();
   if (t === "camp") ensureCampaign();
   if (t === "loc") locs?.render();
 }
+
+/* ---------- the map on a second screen ---------- */
+let popCtl = null, popBusy = false;
+const paneMap = document.getElementById("paneMap");
+const mapHolder = document.createElement("section");
+mapHolder.className = "pane";
+mapHolder.id = "mapPlaceholder";
+mapHolder.hidden = true;
+mapHolder.innerHTML = `<div class="poppednote"><h2>The map is on your other screen</h2>
+  <p>Everything you do there, like moving tokens, painting fog and changing the grid, works as usual. The tabs here are free for other things.</p>
+  <div class="row" style="flex:0 0 auto"><button class="btn primary" type="button" data-act="show">Show the map window</button>
+  <button class="btn" type="button" data-act="back">Bring the map back here</button></div></div>`;
+paneMap.after(mapHolder);
+
+async function popOutMap() {
+  if (popCtl) { popCtl.focus(); return; }
+  if (popBusy) return;
+  popBusy = true;
+  try {
+    const ctl = await openPopout({ el: paneMap, name: `dmtable-map-${room}`, title: `Map · ${room}`, onClose: onPopClosed });
+    if (!ctl) { toast("The map window didn't open. Allow pop-ups for this site, then try again."); return; }
+    popCtl = ctl;
+    popDoc = ctl.doc;
+    mv.watchSize(ctl.win);
+    $("#popMap").textContent = "Show map window";
+    setTab(tab);
+    mv.fit();
+    toast("The map is open in its own window. Drag it to your other screen.");
+  } finally { popBusy = false; }
+}
+
+function onPopClosed() {
+  popCtl = null;
+  popDoc = null;
+  mv.watchSize(window);
+  $("#popMap").textContent = "Map on 2nd screen";
+  setTab(tab);
+  mv.fit();
+}
+
+$("#popMap").onclick = popOutMap;
+mapHolder.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-act]");
+  if (b?.dataset.act === "show") popCtl?.focus();
+  else if (b?.dataset.act === "back") popCtl?.close();
+});
 
 /* Campaign details and session log: loaded the first time the tab is opened. */
 let campaign = null;
