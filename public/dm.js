@@ -86,7 +86,8 @@ async function flush() {
   }
 }
 
-window.addEventListener("beforeunload", (e) => { if (dirty || saving) { e.preventDefault(); e.returnValue = ""; } });
+const unloadGuard = (e) => { if (dirty || saving) { e.preventDefault(); e.returnValue = ""; } };
+window.addEventListener("beforeunload", unloadGuard);
 
 function changed() {
   bump();
@@ -1198,18 +1199,28 @@ $("#copyLink").onclick = async () => {
   try { await navigator.clipboard.writeText(link); toast("Player link copied."); }
   catch { prompt("Copy this link for your players:", link); }
 };
-$("#leave").textContent = viaAccount ? "All campaigns" : "Leave";
-$("#leave").onclick = async () => {
-  if (viaAccount) {
-    clearTimeout(timer); timer = null;
-    try { await flush(); } catch { /* the leave-page warning covers anything unsaved */ }
-    localStorage.removeItem("dmTable");
-    location.href = "dm-home.html";
-    return;
-  }
-  if (!confirm("Leave this table? You can resume it later with the table code and PIN.")) return;
+/* Leaving saves what's pending (waiting a moment at most) and then goes, without any browser pop-ups that
+   might be blocked. */
+async function leaveTable(where) {
+  clearTimeout(timer); timer = null;
+  try { await Promise.race([flush(), new Promise((r) => setTimeout(r, 2500))]); } catch { /* we're leaving anyway */ }
+  window.removeEventListener("beforeunload", unloadGuard);
   localStorage.removeItem("dmTable");
-  location.href = "/";
+  location.href = where;
+}
+
+$("#leave").textContent = viaAccount ? "All campaigns" : "Leave";
+$("#leave").onclick = () => {
+  if (viaAccount) { leaveTable("dm-home.html"); return; }
+  openDlg(`
+    <form>
+      <h2>Leave this table?</h2>
+      <p style="margin:0 0 .6rem">You can come back later with the table code and your PIN.</p>
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-close>Stay</button>
+        <button type="submit" class="btn primary">Leave</button>
+      </div>
+    </form>`, () => { dlg.close(); leaveTable("/"); });
 };
 
 /* ---------- start ---------- */
@@ -1234,6 +1245,7 @@ $("#leave").onclick = async () => {
     state.inv.stash ||= []; state.inv.dm ||= [];
     renderMap();
     renderSide();
+    window.__started = true;   // the page's scripts all loaded and the table is on screen
     locs = mountLocations($("#locRoot"), {
       room, pin, toast, setSync,
       state: () => state,

@@ -174,3 +174,4 @@ $("#claimForm").addEventListener("submit", async (e) => {
 $("#pwBtn").onclick = passwordDialog;
 $("#outBtn").onclick = signOut;
 load();
+window.__started = true;

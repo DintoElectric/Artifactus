@@ -561,3 +561,4 @@ async function poll() {
 }
 document.addEventListener("visibilitychange", () => { if (!document.hidden) { clearTimeout(timer); poll(); } });
 poll();
+window.__started = true;

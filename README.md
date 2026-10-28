@@ -29,3 +29,4 @@ Existing tables keep working after an update.
 - Campaign tab (DM): game details (overview, premise, themes, setting, factions, table rules, secrets) and a session log (recap, accomplished, learned, earned, people and places, open threads, private notes). Each section can be shared with players, who see it under Campaign. Export a Word (.docx) report: a full DM version or a player recap of shared items only. Secrets and DM notes can never be shared.
 - Objectives are DM-managed; each one is hidden or shown to players.
 - Grid tools: dim the grid, slide it under the map, and outline shapes so the grid stops at the edges of irregular maps.
+- If a page can't start (usually a file missing or out of date after an update), a red banner at the top says so and names the problem. Fix it by uploading the complete project files and refreshing with Ctrl+Shift+R.

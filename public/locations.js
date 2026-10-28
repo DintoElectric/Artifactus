@@ -9,7 +9,7 @@ import { compressMap, makeThumb } from "./images.js";
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 export const defaultGrid = (w, h) => ({
-  on: false, size: Math.max(16, Math.round(Math.max(w, h) / 30)), snap: false, opacity: 0.3, dark: false, ox: 0, oy: 0, areas: [],
+  on: false, mode: "flat", size: Math.max(16, Math.round(Math.max(w, h) / 30)), snap: false, opacity: 0.3, dark: false, ox: 0, oy: 0, areas: [],
 });
 
 /* What gets remembered about a location from the live table. */

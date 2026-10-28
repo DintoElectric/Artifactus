@@ -452,3 +452,7 @@ dialog h2{margin-bottom:1rem}
 .camptop code{font-family:ui-monospace,Menlo,Consolas,monospace;letter-spacing:.14em;color:var(--brass);background:#121722;border:1px solid var(--line);border-radius:8px;padding:.15rem .5rem;flex:none}
 .campact{display:flex;gap:.4rem;flex-wrap:wrap}
 .campact .btn.primary{flex:1 1 100%}
+
+/* ---------- startup problem banner ---------- */
+.bootbanner{position:fixed;top:0;left:0;right:0;z-index:300;background:#4a1f26;color:#fff;border-bottom:3px solid var(--bad);padding:.8rem 1rem;font-size:1rem;line-height:1.45}
+.bootbanner small{display:block;margin-top:.3rem;color:#f0c4ca;font-family:ui-monospace,Menlo,Consolas,monospace;word-break:break-word}

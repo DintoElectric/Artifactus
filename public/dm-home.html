@@ -9,6 +9,29 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Alegreya:ital,wght@0,500;0,700;1,500&family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
+<script>
+/* If the page's scripts can't start (a missing or out-of-date file after an update), say so instead of showing a blank screen. */
+(function () {
+  var shown = false;
+  function show(detail) {
+    if (shown || window.__started) return;
+    shown = true;
+    var d = document.createElement("div");
+    d.className = "bootbanner";
+    d.setAttribute("role", "alert");
+    d.innerHTML = "<b>This page couldn't start.</b> A file may be missing or out of date after an update. Upload the complete set of project files, then refresh with Ctrl+Shift+R (Cmd+Shift+R on a Mac).<br><small></small>";
+    d.querySelector("small").textContent = "Detail: " + detail;
+    (document.body || document.documentElement).insertBefore(d, (document.body || document.documentElement).firstChild);
+  }
+  window.addEventListener("error", function (e) {
+    var t = e.target;
+    if (t && t !== window && t.tagName) { if (t.tagName === "SCRIPT") show("could not load " + String(t.src || "").split("/").pop()); return; }
+    show(e.message || "unknown error");
+  }, true);
+  window.addEventListener("unhandledrejection", function (e) { show(String((e.reason && e.reason.message) || e.reason)); });
+  setTimeout(function () { show("the page did not finish starting"); }, 15000);
+})();
+</script>
 </head>
 <body>
 <main class="home">
