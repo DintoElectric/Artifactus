@@ -389,6 +389,10 @@ function ensureCampaign() {
     room, pin, toast,
     // Players refresh their Campaign panel when the revision in the table state changes.
     onShared(rev) { state.campRev = rev; bump(); scheduleSave(); },
+    // Session plans: put creatures on the map, and jump to the saved maps a plan mentions.
+    addToMap: addPlannedTokens,
+    getLocations: () => locs?.list() || [],
+    goToLocation(id) { locs?.openSwitch(id); },
   });
   campaign.load();
 }
@@ -418,7 +422,8 @@ $("#addForm").addEventListener("submit", (e) => {
   $("#tokCount2").value = 1;
 });
 
-function addTokens(name, type, count, preset) {
+function addTokens(name, type, count, preset, extra = null) {
+  const made = [];
   const c = mv.centerPoint() || { x: 0.5, y: 0.5 };
   const w = state.mapW || 1, h = state.mapH || 1, g = mv.cellSizeAt(c.x, c.y);
   const [, icon, shape, pw, ph, tint] = preset || [];
@@ -435,11 +440,25 @@ function addTokens(name, type, count, preset) {
       size: 1, hp: null, maxHp: null, hidden: false, down: false,
     };
     if (type === "object") Object.assign(e, { icon, shape, w: pw, h: ph, rot: 0, tint, labelIn: STRUCT_SHAPES.has(shape) });
+    if (extra) Object.assign(e, extra);
     state.ents.push(e);
+    made.push(e);
     if (type === "pc") state.inv[e.id] = [];
   }
   if (!state.mapRev) toast("Tokens will show up once you upload a map.");
   changed();
+  return made;
+}
+
+/* From a session plan: put NPCs or stat-block creatures on the map, with their hit points and initiative bonus. */
+function addPlannedTokens({ name, type = "enemy", count = 1, hp = null, maxHp = null, initMod = 0, hidden = false, toInit = false }) {
+  if (!["npc", "enemy"].includes(type)) return 0;
+  const extra = { hidden: !!hidden };
+  if (hp) { extra.hp = hp; extra.maxHp = maxHp || hp; }
+  if (initMod) extra.initMod = initMod;
+  const made = addTokens(name, type, Math.max(1, Math.min(20, count)), null, extra);
+  if (toInit) { made.forEach((e) => addToInit(e.id)); changed(); }
+  return made.length;
 }
 
 function select(id) {
@@ -692,7 +711,7 @@ $("#rollBtn").onclick = () => {
   let n = 0;
   for (const it of state.init.list) {
     const e = ent(it.id);
-    if (e && e.type !== "pc" && it.init == null) { it.init = 1 + Math.floor(Math.random() * 20); n++; }
+    if (e && e.type !== "pc" && it.init == null) { it.init = 1 + Math.floor(Math.random() * 20) + (e.initMod || 0); n++; }
   }
   if (!n) toast("Nobody to roll for. Players enter their own numbers.");
   sortInit();

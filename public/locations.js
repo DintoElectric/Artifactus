@@ -432,5 +432,7 @@ export function mountLocations(root, ctx) {
   }
 
   render();
-  return { load, touch, uploadMap, render, refreshQuick: renderQuick, active, createLocation, switchTo, deleteLocation, saveCurrent, flush: async () => { if (syncActive()) await saveDoc(); } };
+  return { load, touch, uploadMap, render, refreshQuick: renderQuick, active, createLocation, switchTo,
+    list: () => (doc ? doc.locations.map((l) => ({ id: l.id, name: l.name })) : []),   // for a session plan to link to saved maps
+    openSwitch: (id) => switchDialog(id), deleteLocation, saveCurrent, flush: async () => { if (syncActive()) await saveDoc(); } };
 }

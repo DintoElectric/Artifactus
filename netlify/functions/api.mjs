@@ -101,7 +101,7 @@ function publicView(s) {
     .filter((e) => !e.hidden)
     .map((e) => {
       visible.add(e.id);
-      return e.type === "pc" ? e : { ...e, hp: null, maxHp: null };
+      return e.type === "pc" ? e : { ...e, hp: null, maxHp: null, initMod: undefined };   // players don't see enemy HP or initiative bonuses
     });
   const inv = { stash: s.inv?.stash || [] };
   for (const e of ents) if (e.type === "pc") inv[e.id] = s.inv?.[e.id] || [];
@@ -231,6 +231,32 @@ const CAMP_SHARE = ["overview", "premise", "themes", "setting", "factions", "rul
 const CAMP_ALL = [...CAMP_SHARE, "secrets"];                       // "secrets" can never be shared
 const SESS_SHARE = ["recap", "accomplished", "learned", "earned", "npcs", "threads"];
 const SESS_ALL = [...SESS_SHARE, "dmnotes"];                       // "dmnotes" can never be shared
+/* A session plan: the DM's prep for a session. It is private: players never receive any of it. */
+const BEAT_KINDS = ["scene", "combat", "social", "explore", "puzzle", "reveal"];
+const DIALOGUE_KINDS = ["read", "say", "option", "other"];
+function cleanPlan(p) {
+  p = p && typeof p === "object" ? p : {};
+  const list = (arr, max, fn) => (Array.isArray(arr) ? arr : []).slice(0, max).map((x) => (x && typeof x === "object" ? fn(x) : null)).filter(Boolean);
+  const id = (x) => cleanId(x?.id) || Math.random().toString(36).slice(2, 9);
+  return {
+    goal: str(p.goal, 4000), strongStart: str(p.strongStart, 4000), notes: str(p.notes, 8000),
+    beats: list(p.beats, 80, (b) => ({ id: id(b), text: str(b.text, 1500), kind: BEAT_KINDS.includes(b.kind) ? b.kind : "scene", note: str(b.note, 3000), done: !!b.done })),
+    secrets: list(p.secrets, 80, (b) => ({ id: id(b), text: str(b.text, 1500), done: !!b.done })),
+    places: list(p.places, 40, (b) => ({ id: id(b), name: str(b.name, 80), notes: str(b.notes, 3000), locId: cleanId(b.locId) })),
+    npcs: list(p.npcs, 60, (b) => ({ id: id(b), name: str(b.name, 80), role: str(b.role, 120), wants: str(b.wants, 1000), secret: str(b.secret, 1000), voice: str(b.voice, 500), notes: str(b.notes, 3000) })),
+    dialogue: list(p.dialogue, 80, (b) => ({ id: id(b), kind: DIALOGUE_KINDS.includes(b.kind) ? b.kind : "say", who: str(b.who, 80), text: str(b.text, 3000) })),
+    enemies: list(p.enemies, 40, (b) => {
+      const ab = b.abilities && typeof b.abilities === "object" ? b.abilities : {};
+      const abilities = {};
+      for (const k of ABIL) abilities[k] = num(ab[k], 1, 30, 10);
+      return { id: id(b), name: str(b.name, 60), kind: str(b.kind, 100), ac: str(b.ac, 30), hp: num(b.hp, 0, 9999, 0), hpNote: str(b.hpNote, 40), speed: str(b.speed, 80),
+        abilities, saves: str(b.saves, 120), skills: str(b.skills, 200), resist: str(b.resist, 250), senses: str(b.senses, 200), languages: str(b.languages, 200),
+        cr: str(b.cr, 12), traits: str(b.traits, 4000), actions: str(b.actions, 4000), extra: str(b.extra, 4000), count: num(b.count, 1, 20, 1) };
+    }),
+    rewards: list(p.rewards, 60, (b) => ({ id: id(b), text: str(b.text, 1000), done: !!b.done })),
+  };
+}
+
 const campField = (f, shareable) => ({ text: str(f?.text, 20000), shared: shareable && !!f?.shared });
 function cleanCamp(d) {
   d = d && typeof d === "object" ? d : {};
@@ -240,7 +266,7 @@ function cleanCamp(d) {
   const sessions = (Array.isArray(d.sessions) ? d.sessions : []).slice(0, 300).map((x) => {
     const fields = {};
     for (const k of SESS_ALL) fields[k] = campField(x?.fields?.[k], SESS_SHARE.includes(k));
-    return { id: cleanId(x?.id) || Math.random().toString(36).slice(2, 9), number: Math.min(9999, Math.max(0, Math.round(Number(x?.number)) || 0)), title: str(x?.title, 120), date: str(x?.date, 20), fields };
+    return { id: cleanId(x?.id) || Math.random().toString(36).slice(2, 9), number: Math.min(9999, Math.max(0, Math.round(Number(x?.number)) || 0)), title: str(x?.title, 120), date: str(x?.date, 20), fields, plan: cleanPlan(x?.plan) };
   });
   return { campaign, sessions };
 }

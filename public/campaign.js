@@ -23,12 +23,21 @@ export const SESSION_FIELDS = [
 ];
 
 const blankField = () => ({ text: "", shared: false });
+
+/* A session plan: prep for the DM's eyes only. It is never part of what players can see. */
+export const blankPlan = () => ({ goal: "", strongStart: "", notes: "", beats: [], secrets: [], places: [], npcs: [], dialogue: [], enemies: [], rewards: [] });
+export const blankStats = () => ({ id: Math.random().toString(36).slice(2, 9), name: "", kind: "", ac: "", hp: 0, hpNote: "", speed: "30 ft.",
+  abilities: { str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10 }, saves: "", skills: "", resist: "", senses: "", languages: "", cr: "",
+  traits: "", actions: "", extra: "", count: 1 });
+export const planCounts = (plan) => ({ beats: plan.beats.length, beatsDone: plan.beats.filter((b) => b.done).length });
+export const planHasContent = (p) => !!(p.goal.trim() || p.strongStart.trim() || p.notes.trim() || p.beats.length || p.secrets.length || p.places.length || p.npcs.length || p.dialogue.length || p.enemies.length || p.rewards.length);
 export const blankSession = (number = 1) => ({
   id: Math.random().toString(36).slice(2, 9),
   number,
   title: "",
   date: new Date().toISOString().slice(0, 10),
   fields: Object.fromEntries(SESSION_FIELDS.map((f) => [f.key, blankField()])),
+  plan: blankPlan(),
 });
 
 export const blankDoc = () => ({
@@ -48,6 +57,11 @@ export function normalizeDoc(doc) {
   for (const s of d.sessions) {
     s.fields ||= {};
     for (const f of SESSION_FIELDS) s.fields[f.key] ||= blankField();
+    // sessions saved before plans existed get an empty plan
+    const base = blankPlan();
+    s.plan = s.plan && typeof s.plan === "object" ? s.plan : {};
+    for (const k of Object.keys(base)) if (typeof base[k] === "string" ? typeof s.plan[k] !== "string" : !Array.isArray(s.plan[k])) s.plan[k] = base[k];
+    for (const e of s.plan.enemies) { e.abilities = { str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10, ...(e.abilities || {}) }; e.count ||= 1; }
   }
   return d;
 }
@@ -84,9 +98,64 @@ function textBlocks(text) {
   });
 }
 
+const BEAT_LABEL = { scene: "Scene", combat: "Combat", social: "Social", explore: "Exploration", puzzle: "Puzzle or trap", reveal: "Reveal" };
+const abilityMod = (n) => { const m = Math.floor(((Number(n) || 10) - 10) / 2); return (m >= 0 ? "+" : "−") + Math.abs(m); };
+
+/* A session plan as document blocks, for the full DM report. */
+function planBlocks(plan) {
+  const out = [{ type: "h3", text: "Session plan" }];
+  const labelled = (label, text) => { if (text.trim()) out.push({ type: "strong", text: label }, ...textBlocks(text)); };
+  const line = (label, text) => { if (String(text).trim()) out.push({ type: "p", text: `${label}: ${String(text).trim()}` }); };
+  labelled("Goal", plan.goal);
+  labelled("Strong start", plan.strongStart);
+  if (plan.beats.length) {
+    out.push({ type: "strong", text: "Beats" });
+    for (const b of plan.beats) out.push({ type: "bullet", text: `${b.done ? "☑" : "☐"} ${BEAT_LABEL[b.kind] || "Scene"}: ${b.text.trim()}${b.note.trim() ? ` (${b.note.trim().replace(/\s+/g, " ")})` : ""}` });
+  }
+  if (plan.secrets.length) {
+    out.push({ type: "strong", text: "Secrets and clues" });
+    for (const x of plan.secrets) out.push({ type: "bullet", text: `${x.done ? "☑" : "☐"} ${x.text.trim()}` });
+  }
+  if (plan.places.length) {
+    out.push({ type: "strong", text: "Locations" });
+    for (const p of plan.places) out.push({ type: "bullet", text: `${p.name.trim() || "Unnamed place"}${p.notes.trim() ? `: ${p.notes.trim().replace(/\s+/g, " ")}` : ""}` });
+  }
+  if (plan.npcs.length) {
+    out.push({ type: "strong", text: "NPCs" });
+    for (const n of plan.npcs) {
+      out.push({ type: "strong", text: `${n.name.trim() || "Unnamed NPC"}${n.role.trim() ? ` — ${n.role.trim()}` : ""}` });
+      line("Wants", n.wants); line("Secret", n.secret); line("Voice", n.voice); line("Notes", n.notes);
+    }
+  }
+  if (plan.dialogue.length) {
+    out.push({ type: "strong", text: "Dialogue and read-aloud text" });
+    for (const d of plan.dialogue) {
+      const who = d.who.trim();
+      const head = d.kind === "read" ? "Read aloud" : d.kind === "option" ? "Player option" : d.kind === "say" ? (who || "NPC") : who || "Note";
+      out.push({ type: "bullet", text: `${head}: ${d.text.trim().replace(/\s+/g, " ")}` });
+    }
+  }
+  if (plan.enemies.length) {
+    out.push({ type: "strong", text: "Enemies and stat blocks" });
+    for (const e of plan.enemies) {
+      out.push({ type: "strong", text: `${e.name.trim() || "Unnamed creature"}${e.kind.trim() ? `, ${e.kind.trim()}` : ""}${e.cr.trim() ? ` (CR ${e.cr.trim()})` : ""}` });
+      out.push({ type: "p", text: `AC ${e.ac || "?"} · HP ${e.hp || "?"}${e.hpNote.trim() ? ` (${e.hpNote.trim()})` : ""} · Speed ${e.speed || "?"}` });
+      out.push({ type: "p", text: ["str", "dex", "con", "int", "wis", "cha"].map((k) => `${k.toUpperCase()} ${e.abilities[k]} (${abilityMod(e.abilities[k])})`).join("   ") });
+      line("Saving throws", e.saves); line("Skills", e.skills); line("Resistances and immunities", e.resist); line("Senses", e.senses); line("Languages", e.languages);
+      labelled("Traits", e.traits); labelled("Actions", e.actions); labelled("Reactions and legendary actions", e.extra);
+    }
+  }
+  if (plan.rewards.length) {
+    out.push({ type: "strong", text: "Rewards" });
+    for (const x of plan.rewards) out.push({ type: "bullet", text: `${x.done ? "☑" : "☐"} ${x.text.trim()}` });
+  }
+  labelled("Contingencies and notes", plan.notes);
+  return out;
+}
+
 /* Build the blocks for the Word report.
    mode "full": everything, including DM-only sections.  mode "players": shared details only. */
-export function buildReport(doc, { mode = "full", sessionIds = null, includeCampaign = true } = {}) {
+export function buildReport(doc, { mode = "full", sessionIds = null, includeCampaign = true, includePlan = true } = {}) {
   const full = mode === "full";
   const blocks = [];
   const view = sharedView(doc);
@@ -117,6 +186,7 @@ export function buildReport(doc, { mode = "full", sessionIds = null, includeCamp
       const heading = `Session ${s.number}${s.title ? ": " + s.title : ""}`;
       blocks.push({ type: "h2", text: heading });
       if (s.date) blocks.push({ type: "meta", text: prettyDate(s.date) });
+      if (full && includePlan && s.plan && planHasContent(s.plan)) blocks.push(...planBlocks(s.plan));   // prep first; it's never in a player recap
       for (const f of SESSION_FIELDS) {
         const text = full ? s.fields[f.key].text : s.fields[f.key] || "";
         if (!text.trim()) continue;

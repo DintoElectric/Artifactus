@@ -1,15 +1,18 @@
 import { call, esc } from "./common.js";
 import {
-  CAMPAIGN_FIELDS, SESSION_FIELDS, blankSession, normalizeDoc, sharedView, buildReport, prettyDate,
+  CAMPAIGN_FIELDS, SESSION_FIELDS, blankSession, normalizeDoc, sharedView, buildReport, prettyDate, planCounts, planHasContent,
 } from "./campaign.js";
+import { mountPlan } from "./session-plan.js";
 import { makeDocx, downloadBlob } from "./docx.js";
 
 const STATUS = { saved: "Saved", saving: "Saving…", error: "Offline, retrying…" };
 const rowsFor = (text) => Math.max(3, Math.min(14, Math.ceil(String(text).length / 70) + 1));
 
-/* onShared(rev) is called when the part players can see has changed, so their phones refresh. */
-export function mountCampaign(root, { room, pin, toast, onShared }) {
+/* onShared(rev) is called when the part players can see has changed, so their phones refresh.
+   addToMap(spec), getLocations() and goToLocation(id) connect a session plan to the map and saved locations. */
+export function mountCampaign(root, { room, pin, toast, onShared, addToMap, getLocations, goToLocation }) {
   let doc = null, view = "details", selId = "", loadFailed = false;
+  const sviews = new Map();   // per session: showing its plan or its log
   let status = "saved", saving = false, dirty = false, timer = null, lastShared = "";
 
   root.innerHTML = `
@@ -87,7 +90,31 @@ export function mountCampaign(root, { room, pin, toast, onShared }) {
       </div>`;
   }
 
-  const listLabel = (s) => `<span class="sn">Session ${s.number}${s.title ? ": " + esc(s.title) : ""}</span><small>${esc(prettyDate(s.date))}${Object.values(s.fields).some((f) => f.shared && f.text.trim()) ? " · shared" : ""}</small>`;
+  const listLabel = (s) => {
+    const c = planCounts(s.plan);
+    return `<span class="sn">Session ${s.number}${s.title ? ": " + esc(s.title) : ""}</span><small>${esc(prettyDate(s.date))}${c.beats ? ` · ${c.beatsDone}/${c.beats} beats` : ""}${Object.values(s.fields).some((f) => f.shared && f.text.trim()) ? " · shared" : ""}</small>`;
+  };
+
+  /* A new or planned-but-not-yet-played session opens on its plan; one with a log opens on the log. */
+  const viewOf = (s) => sviews.get(s.id) || (planHasContent(s.plan) || !Object.values(s.fields).some((f) => f.text.trim()) ? "plan" : "log");
+
+  /* A small question dialog, used by the plan (for example, how many goblins to add to the map). */
+  function ask(html, onSubmit) {
+    dlg.innerHTML = html;
+    dlg.querySelector("[data-close]").onclick = () => dlg.close();
+    dlg.querySelector("form").onsubmit = (e) => {
+      e.preventDefault();
+      onSubmit(Object.fromEntries(new FormData(e.target)), () => dlg.close());
+    };
+    dlg.showModal();
+  }
+
+  const planTouch = () => {
+    const s = current();
+    const btn = s && body.querySelector(`.sitem[data-sid="${s.id}"]`);
+    if (btn) btn.innerHTML = listLabel(s);
+    touch();
+  };
 
   function renderSessions() {
     const s = current();
@@ -100,23 +127,35 @@ export function mountCampaign(root, { room, pin, toast, onShared }) {
         </nav>
         <div class="sedit">${s ? sessionEditor(s) : '<p class="empty">Choose a session, or add a new one.</p>'}</div>
       </div>`;
+    const pc = body.querySelector("[data-plan]");
+    if (pc && s) mountPlan(pc, s.plan, { touch: planTouch, toast: (m) => toast?.(m), ask, addToMap, getLocations, goToLocation });
   }
 
-  const sessionEditor = (s) => `
+  const sessionEditor = (s) => {
+    const v = viewOf(s);
+    return `
     <div class="smeta cfields">
       <div class="row">
         <label class="cf" style="flex:0 0 5.5rem"><span>Number</span><input type="number" inputmode="numeric" data-sm="number" value="${s.number}" min="0" max="9999"></label>
         <label class="cf" style="flex:2 1 12rem"><span>Title</span><input type="text" data-sm="title" value="${esc(s.title)}" maxlength="120" placeholder="Session title"></label>
         <label class="cf" style="flex:1 1 9rem"><span>Date</span><input type="date" data-sm="date" value="${esc(s.date)}"></label>
       </div>
+      <div class="row" style="align-items:center">
+        <div class="seg mini" role="group" aria-label="Plan or log">
+          <button type="button" data-sview="plan" aria-pressed="${v === "plan"}">Plan</button>
+          <button type="button" data-sview="log" aria-pressed="${v === "log"}">Log</button>
+        </div>
+        <span class="hint">${v === "plan" ? "Your prep for this session. Players never see it." : "What happened. Tick “Share with players” on anything they can see."}</span>
+      </div>
       <div class="btnrow">
-        <button class="btn small" type="button" data-act="sharesess">Share this whole session</button>
-        <button class="btn small" type="button" data-act="hidesess">Stop sharing it</button>
+        ${v === "log" ? `<button class="btn small" type="button" data-act="sharesess">Share this whole session</button>
+        <button class="btn small" type="button" data-act="hidesess">Stop sharing it</button>` : ""}
         <button class="btn small" type="button" data-act="exportsess">Export this session</button>
         <button class="btn small danger" type="button" data-act="delsess">Delete</button>
       </div>
-      ${SESSION_FIELDS.map((f) => fieldHTML("s", f, s.fields[f.key])).join("")}
+      ${v === "plan" ? '<div class="plan" data-plan></div>' : SESSION_FIELDS.map((f) => fieldHTML("s", f, s.fields[f.key])).join("")}
     </div>`;
+  };
 
   function render() {
     root.querySelectorAll("[data-view]").forEach((b) => b.setAttribute("aria-pressed", b.dataset.view === view));
@@ -164,6 +203,8 @@ export function mountCampaign(root, { room, pin, toast, onShared }) {
   body.addEventListener("click", (e) => {
     const item = e.target.closest("[data-sid]");
     if (item) { selId = item.dataset.sid; renderSessions(); return; }
+    const sv = e.target.closest("[data-sview]");
+    if (sv) { const cur = current(); if (cur) { sviews.set(cur.id, sv.dataset.sview); renderSessions(); } return; }
     const b = e.target.closest("[data-act]");
     if (!b) return;
     const act = b.dataset.act;
@@ -214,6 +255,7 @@ export function mountCampaign(root, { room, pin, toast, onShared }) {
           <label class="check"><input type="radio" name="mode" value="players"> Player recap (only what you've shared)</label>
         </fieldset>
         <label class="check"><input type="checkbox" name="camp" ${onlySession ? "" : "checked"}> Include the game details</label>
+        <label class="check"><input type="checkbox" name="plan" checked> Include session plans (full DM report only)</label>
         <fieldset class="optset"><legend>Sessions</legend>
           ${sessions.length ? `<div class="btnrow"><button type="button" class="btn small" data-all="1">Select all</button><button type="button" class="btn small" data-all="0">Select none</button></div>
           <div class="sesspick">${sessions.map((s) => `
@@ -234,7 +276,7 @@ export function mountCampaign(root, { room, pin, toast, onShared }) {
       e.preventDefault();
       const f = new FormData(e.target);
       const ids = f.getAll("s");
-      const blocks = buildReport(doc, { mode: f.get("mode"), includeCampaign: f.get("camp") === "on", sessionIds: ids });
+      const blocks = buildReport(doc, { mode: f.get("mode"), includeCampaign: f.get("camp") === "on", includePlan: f.get("plan") === "on", sessionIds: ids });
       const base = (doc.campaign.name.trim() || "Campaign").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-") || "Campaign";
       downloadBlob(makeDocx(blocks), `${base}-${f.get("mode") === "players" ? "Player-Recap" : "Report"}-${new Date().toISOString().slice(0, 10)}.docx`);
       dlg.close();

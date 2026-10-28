@@ -542,3 +542,43 @@ html.popwin,html.popwin body{height:100%;margin:0}
 .popbanner{position:absolute;left:.7rem;top:.7rem;z-index:6;background:rgba(10,13,20,.88);border:1px solid var(--line);border-radius:10px;padding:.3rem .8rem;
   font-family:var(--serif);font-size:1.3rem}
 .popbanner.me{border-color:var(--brass);color:var(--brass);font-weight:700}
+
+/* ---------- session plan (the DM's prep for one session) ---------- */
+.plan{display:grid;gap:.6rem;max-width:860px}
+.plannav{display:flex;flex-wrap:wrap;gap:.35rem}
+.plchip{background:var(--panel2);border:1px solid var(--line);border-radius:999px;color:var(--text);font-size:.88rem;padding:.22rem .7rem}
+.plchip:hover{border-color:var(--brass)}
+.plchip small{color:var(--brass);margin-left:.15rem}
+.plsec{background:var(--panel);border:1px solid var(--line);border-radius:12px}
+.plsec>summary{display:flex;justify-content:space-between;align-items:center;gap:.6rem;cursor:pointer;list-style:none;padding:.6rem .85rem;
+  font-family:var(--serif);font-weight:700;font-size:1.1rem}
+.plsec>summary::-webkit-details-marker{display:none}
+.plsec>summary::before{content:"▸";color:var(--brass);margin-right:.5rem;display:inline-block;transition:transform .12s}
+.plsec[open]>summary::before{transform:rotate(90deg)}
+.plsec>summary>span{flex:1}
+.plcount{font-family:var(--sans);font-weight:400;color:var(--mute);font-size:.88rem}
+.plbody{display:grid;gap:.6rem;padding:0 .85rem .85rem}
+.plbody .btn.small{justify-self:start}
+.plitem{display:grid;gap:.45rem;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:.6rem .65rem}
+.plitem.done textarea,.plitem.done .plname{text-decoration:line-through;color:var(--mute)}
+.plitem textarea,.plitem input[type=text],.plitem input[type=number],.plitem select{width:100%;min-width:0}
+.plitem textarea{resize:vertical;min-height:2.6rem}
+.plrow{display:flex;gap:.45rem;align-items:flex-start;flex-wrap:wrap}
+.plrow>input,.plrow>select{flex:1 1 9rem;width:auto}
+.plrow>textarea{flex:1 1 12rem;width:auto}
+.plrow .plname{flex:2 1 11rem;font-weight:700}
+.plact{display:flex;gap:.15rem;align-items:center;margin-left:auto}
+.plact .x.armed{color:var(--bad);font-size:.9rem;font-weight:700}
+.pldone{padding:.35rem .2rem}
+.plnote summary{cursor:pointer;color:var(--mute);font-size:.88rem}
+.plnote textarea{margin-top:.3rem}
+.plgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(7.5rem,1fr));gap:.45rem}
+.plgrid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr));gap:.45rem}
+.plabil{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:.35rem}
+.plabil .cf{text-align:center;justify-items:center}
+.plabil input{text-align:center;padding-left:.2rem;padding-right:.2rem}
+.plabil em{font-style:normal;color:var(--brass);font-weight:700;font-size:.9rem}
+.plitem.stat{border-left:3px solid var(--enemy)}
+.plitem.pld-read{border-left:3px solid var(--brass);background:rgba(212,170,92,.07)}
+.plitem.pld-option{border-left:3px solid var(--pc)}
+@media (max-width:560px){.plabil{grid-template-columns:repeat(3,minmax(0,1fr))}}

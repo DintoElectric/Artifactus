@@ -1,7 +1,7 @@
 /* A small, dependency-free .docx writer. A .docx is a zip of XML files, so this builds the zip
    by hand (stored, not compressed) and fills in a minimal WordprocessingML document.
 
-   Blocks:  { type: "title" | "h1" | "h2" | "h3" | "p" | "meta" | "bullet", text, pageBreak? } */
+   Blocks:  { type: "title" | "h1" | "h2" | "h3" | "strong" | "p" | "meta" | "bullet", text, pageBreak? } */
 
 const enc = new TextEncoder();
 
@@ -60,6 +60,9 @@ const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt
 const STYLE = { title: "Title", h1: "Heading1", h2: "Heading2", h3: "Heading3", meta: "Meta", bullet: "ListBullet", p: null };
 
 function para(b) {
+  if (b.type === "strong") {   // a bold line, used for names and labels inside a section
+    return `<w:p><w:pPr><w:keepNext/><w:spacing w:before="140" w:after="40"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">${esc(b.text)}</w:t></w:r></w:p>`;
+  }
   const style = STYLE[b.type];
   const pPr = (style ? `<w:pStyle w:val="${style}"/>` : "") + (b.pageBreak ? "<w:pageBreakBefore/>" : "");
   const text = b.type === "bullet" ? `\u2022\u00a0\u00a0${b.text}` : b.text;
