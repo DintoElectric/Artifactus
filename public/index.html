@@ -26,12 +26,13 @@
 
   <section class="forms">
     <div class="card" id="dmCard">
-      <h2>I'm a DM</h2>
+      <h2>Sign in</h2>
+      <p class="hint" style="margin:0 0 .8rem">One account to run campaigns as a DM and to keep characters you play.</p>
 
       <div id="signedIn" hidden>
         <p style="margin:0 0 .8rem">Signed in as <b id="who"></b>.</p>
         <div class="row">
-          <a class="btn primary" href="dm-home.html">Open my campaigns</a>
+          <a class="btn primary" href="home.html">Open my home</a>
           <button class="btn ghost" id="signOut" type="button">Sign out</button>
         </div>
       </div>
@@ -54,7 +55,7 @@
       </div>
 
       <details class="olds">
-        <summary>Have an older table code and PIN?</summary>
+        <summary>Have an older table code and PIN? (DMs)</summary>
         <form id="dmForm">
           <div class="field"><label for="dmCode">Table code</label>
             <input id="dmCode" type="text" autocapitalize="characters" autocomplete="off" maxlength="8"></div>
@@ -62,13 +63,14 @@
             <input id="dmPin" type="password" autocomplete="off"></div>
           <button class="btn" type="submit">Open table</button>
           <p class="err" id="dmErr" role="alert"></p>
-          <p class="hint">After you open it, you can add it to your account from your campaigns page.</p>
+          <p class="hint">After you open it, you can add it to your account from your home page.</p>
         </form>
       </details>
     </div>
 
     <div class="card">
-      <h2>I'm a player</h2>
+      <h2>Join with a code</h2>
+      <p class="hint" style="margin:0 0 .8rem">No account needed. Signed-in players can also bring their own characters from their home page.</p>
       <form id="joinForm">
         <div class="field">
           <label for="joinCode">Table code from your DM</label>
@@ -82,19 +84,19 @@
 </main>
 
 <script type="module">
-import { call } from "./common.js";
+import { call, getAccount, setAccount, clearAccount } from "./common.js";
 const $ = (s) => document.querySelector(s);
 let mode = "in";
 
 /* ----- DM accounts ----- */
-const acct = JSON.parse(localStorage.getItem("dmAccount") || "null");
+const acct = getAccount();
 if (acct) {
   $("#who").textContent = acct.name;
   $("#signedIn").hidden = false;
   $("#authBox").hidden = true;
 }
 $("#signOut").onclick = () => {
-  localStorage.removeItem("dmAccount");
+  clearAccount();
   localStorage.removeItem("dmTable");
   location.reload();
 };
@@ -118,9 +120,9 @@ $("#authForm").addEventListener("submit", async (e) => {
   if (mode === "up" && password !== $("#acctPw2").value) { $("#authErr").textContent = "The two passwords don't match."; return; }
   try {
     const r = await call(mode === "in" ? "account/login" : "account/register", { method: "POST", body: { name, password } });
-    localStorage.setItem("dmAccount", JSON.stringify({ name: r.name, token: r.token }));
+    setAccount({ name: r.name, token: r.token });
     localStorage.removeItem("dmTable");
-    location.href = "dm-home.html";
+    location.href = "home.html";
   } catch (err) {
     $("#authErr").textContent = err.message;
   }

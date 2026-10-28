@@ -456,3 +456,42 @@ dialog h2{margin-bottom:1rem}
 /* ---------- startup problem banner ---------- */
 .bootbanner{position:fixed;top:0;left:0;right:0;z-index:300;background:#4a1f26;color:#fff;border-bottom:3px solid var(--bad);padding:.8rem 1rem;font-size:1rem;line-height:1.45}
 .bootbanner small{display:block;margin-top:.3rem;color:#f0c4ca;font-family:ui-monospace,Menlo,Consolas,monospace;word-break:break-word}
+
+/* ---------- home + characters ---------- */
+.hometabs{max-width:560px}
+.hometabs button{min-height:42px}
+.pill{display:inline-block;background:#121722;border:1px solid var(--line);border-radius:99px;padding:.05rem .6rem;font-size:.85rem;color:var(--mute);white-space:nowrap}
+.pill.st-active{color:var(--ok);border-color:var(--ok)}
+.pill.st-pending{color:var(--brass);border-color:var(--brass)}
+.pill.st-denied,.pill.st-gone{color:var(--bad);border-color:var(--bad)}
+.home section{display:grid;gap:1rem}
+.charpage{max-width:900px;margin:0 auto;padding:clamp(1rem,3vw,2rem);display:grid;gap:1rem}
+.charhead{display:flex;align-items:center;gap:.8rem;flex-wrap:wrap}
+.charhead h1{flex:1;min-width:0;font-size:clamp(1.6rem,4vw,2.3rem);overflow-wrap:anywhere}
+.charpage section{min-width:0}
+
+/* ---------- tap to roll ---------- */
+.rollbtn{display:inline-flex;align-items:center;justify-content:center;gap:.3rem;min-height:36px;min-width:3.4rem;padding:.1rem .7rem;border-radius:99px;
+  border:1px solid var(--brass);background:rgba(212,170,92,.12);color:var(--text);font-family:var(--serif);font-weight:700;font-size:1.1rem;line-height:1}
+.rollbtn::before{content:"";width:.8em;height:.8em;background:var(--brass);opacity:.85;clip-path:polygon(50% 0,93% 25%,93% 75%,50% 100%,7% 75%,7% 25%)}
+.rollbtn:hover{background:rgba(212,170,92,.22)}
+.rollbtn:active{transform:scale(.96)}
+.atkbtns .rollbtn{font-family:var(--sans);font-size:.95rem;min-width:5.2rem}
+.rollbar{position:sticky;top:0;z-index:6;background:var(--panel);border:1px solid var(--brass);border-radius:12px;padding:.5rem .7rem;margin-bottom:.7rem;
+  display:grid;gap:.4rem;box-shadow:0 8px 18px rgba(0,0,0,.4)}
+.rollres{display:flex;align-items:baseline;gap:.2rem .7rem;flex-wrap:wrap;min-height:2.4rem}
+.rollres .rl{font-family:var(--serif);font-weight:700}
+.rollres .big{font-family:var(--serif);font-size:2.3rem;line-height:1;animation:rollpop .25s ease-out}
+.rollres .big.crit{color:var(--ok)}
+.rollres .big.fumble{color:var(--bad)}
+.rollres small{color:var(--mute)}
+.rollres .rnote{flex-basis:100%}
+.rollmode{justify-self:start}
+@keyframes rollpop{from{transform:scale(.6);opacity:.3}to{transform:scale(1);opacity:1}}
+@media (prefers-reduced-motion:reduce){.rollres .big{animation:none}}
+.saverow{display:flex;justify-content:space-between;align-items:center;gap:.4rem}
+.abil .amod{display:flex;justify-content:center}
+.atk{grid-template-columns:minmax(0,1.4fr) 4.2rem minmax(0,1.4fr)}
+.atkbtns{grid-column:1/-1;display:flex;gap:.4rem;align-items:center}
+.skill .rollbtn{min-width:3.6rem}
+.cstats .rollbtn{margin-top:.1rem}

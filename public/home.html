@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#161b25">
+<title>Home · DM Table</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Alegreya:ital,wght@0,500;0,700;1,500&family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script>
+/* If the page's scripts can't start (a missing or out-of-date file after an update), say so instead of showing a blank screen. */
+(function () {
+  var shown = false;
+  function show(detail) {
+    if (shown || window.__started) return;
+    shown = true;
+    var d = document.createElement("div");
+    d.className = "bootbanner";
+    d.setAttribute("role", "alert");
+    d.innerHTML = "<b>This page couldn't start.</b> A file may be missing or out of date after an update. Upload the complete set of project files, then refresh with Ctrl+Shift+R (Cmd+Shift+R on a Mac).<br><small></small>";
+    d.querySelector("small").textContent = "Detail: " + detail;
+    (document.body || document.documentElement).insertBefore(d, (document.body || document.documentElement).firstChild);
+  }
+  window.addEventListener("error", function (e) {
+    var t = e.target;
+    if (t && t !== window && t.tagName) { if (t.tagName === "SCRIPT") show("could not load " + String(t.src || "").split("/").pop()); return; }
+    show(e.message || "unknown error");
+  }, true);
+  window.addEventListener("unhandledrejection", function (e) { show(String((e.reason && e.reason.message) || e.reason)); });
+  setTimeout(function () { show("the page did not finish starting"); }, 15000);
+})();
+</script>
+</head>
+<body>
+<main class="home">
+  <header class="homehead">
+    <div>
+      <h1>Welcome, <span id="acctName"></span></h1>
+      <p class="hint" style="margin:.2rem 0 0">Your characters, the campaigns you run, and the ones you play in.</p>
+    </div>
+    <div class="row" style="flex:0 0 auto">
+      <button class="btn small" id="pwBtn" type="button">Change password</button>
+      <button class="btn small ghost" id="outBtn" type="button">Sign out</button>
+    </div>
+  </header>
+
+  <nav class="seg hometabs" role="group" aria-label="Sections">
+    <button type="button" data-tab="chars" aria-pressed="true">My characters</button>
+    <button type="button" data-tab="play" aria-pressed="false">Campaigns I play</button>
+    <button type="button" data-tab="run" aria-pressed="false">Campaigns I run</button>
+  </nav>
+
+  <section id="tabChars">
+    <div class="card">
+      <h2>New character</h2>
+      <form id="newChar" class="row">
+        <input id="newCharName" type="text" maxlength="60" placeholder="Character name" aria-label="Character name" style="flex:1 1 14rem">
+        <button class="btn primary" type="submit">Create character</button>
+      </form>
+      <p class="err" id="newCharErr" role="alert"></p>
+    </div>
+    <ul id="charList" class="campgrid"></ul>
+  </section>
+
+  <section id="tabPlay" hidden>
+    <div class="card">
+      <h2>Join a campaign</h2>
+      <p class="hint" style="margin:0 0 .6rem">Enter the code from your DM and choose which character to bring. The DM decides whether to let you in.</p>
+      <form id="joinForm2" class="row">
+        <input id="joinCode2" type="text" autocapitalize="characters" autocomplete="off" maxlength="8" placeholder="Campaign code" aria-label="Campaign code" style="flex:1 1 9rem">
+        <select id="joinChar" aria-label="Character" style="flex:1 1 11rem"></select>
+        <button class="btn primary" type="submit">Ask to join</button>
+      </form>
+      <p class="err" id="joinErr2" role="alert"></p>
+    </div>
+    <ul id="playList" class="campgrid"></ul>
+  </section>
+
+  <section id="tabRun" hidden>
+    <div class="card">
+      <h2>New campaign</h2>
+      <form id="newForm" class="row">
+        <input id="newName" type="text" maxlength="80" placeholder="Campaign name" aria-label="Campaign name" style="flex:1 1 14rem">
+        <button class="btn primary" type="submit">Create campaign</button>
+      </form>
+      <p class="err" id="newErr" role="alert"></p>
+    </div>
+    <ul id="list" class="campgrid"></ul>
+    <details class="card claim">
+      <summary>Add a table you made before</summary>
+      <p class="hint">If you ran a table with a code and PIN, enter them here to keep it with your account. The PIN keeps working for anyone who has it.</p>
+      <form id="claimForm" class="row">
+        <input id="claimCode" type="text" autocapitalize="characters" autocomplete="off" maxlength="8" placeholder="Table code" aria-label="Table code" style="flex:1 1 8rem">
+        <input id="claimPin" type="password" autocomplete="off" placeholder="DM PIN" aria-label="DM PIN" style="flex:1 1 8rem">
+        <button class="btn" type="submit">Add table</button>
+      </form>
+      <p class="err" id="claimErr" role="alert"></p>
+    </details>
+  </section>
+</main>
+
+<dialog id="dlg"></dialog>
+<div class="toast" id="toast" role="status" hidden></div>
+<script type="module" src="home.js"></script>
+</body>
+</html>

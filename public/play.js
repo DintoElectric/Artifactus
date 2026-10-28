@@ -1,4 +1,4 @@
-import { call, esc, TYPES, MapView, uid, pingColor, PING_TTL } from "./common.js";
+import { call, esc, TYPES, MapView, uid, pingColor, PING_TTL, getAccount } from "./common.js";
 import { mountRoller, rand } from "./dice.js";
 import { SheetStore, mountBook, mountNotes } from "./sheet.js";
 import { mountChar } from "./charsheet.js";
@@ -25,7 +25,8 @@ let session = JSON.parse(localStorage.getItem(LKEY) || "null");   // { pid, name
 let me = session?.pid || "";
 let loginNote = "";
 let inviteChar = params.get("c") || "";
-const auth = () => ({ token: session?.token || undefined });
+const account = getAccount();   // signed in with an account? Then characters from its library log in without a PIN
+const auth = () => (session?.viaAccount && account ? { acct: account.token } : { token: session?.token || undefined });
 
 function saveSession(s) {
   session = s;
@@ -59,8 +60,11 @@ function openLogin(preselect) {
   loginDlg.innerHTML = `
     <h2>Who are you playing?</h2>
     <p class="msg" id="loginMsg" role="alert">${esc(loginNote)}</p>
+    ${account ? `<p class="hint" style="margin:0 0 .7rem">Signed in as <b>${esc(account.name)}</b>. To play one of your own characters, <a href="home.html">ask to join this campaign from your home page</a>.</p>` : ""}
     ${pcs.length ? `<ul class="chars" id="charList">${pcs.map((p) => `
-      <li><button class="btn charbtn" type="button" data-pid="${p.id}"><span>${esc(p.name)}</span><small>${p.locked ? "PIN" : "Open"}</small></button></li>`).join("")}</ul>`
+      <li>${p.acct
+        ? `<button class="btn charbtn" type="button" disabled><span>${esc(p.name)}</span><small>Played by ${esc(p.player || "a player")}</small></button>`
+        : `<button class="btn charbtn" type="button" data-pid="${p.id}"><span>${esc(p.name)}</span><small>${p.locked ? "PIN" : "Open"}</small></button>`}</li>`).join("")}</ul>`
       : '<p class="empty">Your DM hasn\'t added any player characters yet.</p>'}
     <form id="pinForm" hidden>
       <div class="field"><label for="pinIn">PIN for <b id="pinName"></b></label>
@@ -122,8 +126,21 @@ $("#whoBtn").onclick = () => {
 };
 
 /* Ask for a login once the character list arrives, unless they chose to just watch. */
-function maybeAskLogin() {
+let accountTry = null;
+async function maybeAskLogin() {
   if (session || sessionStorage.getItem(WKEY) === "1" || loginDlg.open) return;
+  // Signed in with an account that plays here: go straight in as that character.
+  if (account && !accountTry) {
+    accountTry = (async () => {
+      try {
+        const r = await call(`playerlogin/${room}`, { method: "POST", body: {}, acct: account.token });
+        saveSession({ pid: r.pid, name: r.name, token: null, viaAccount: true });
+        return true;
+      } catch { setTimeout(() => { accountTry = null; }, 10000); return false; }   // try again in a bit: the DM may approve while you wait
+    })();
+  }
+  if (accountTry && (await accountTry)) return;
+  if (session || loginDlg.open) return;
   if (st.ents.some((e) => e.type === "pc")) openLogin();
 }
 
@@ -363,7 +380,7 @@ function bindStore() {
   store = new SheetStore(room, me, auth());
   store.subscribe(() => { if (store.status === "auth") logout("Your login changed, so please sign in again."); });
   for (const [sel, mount, opts] of [
-    ["#charBody", mountChar, { hp: hpOpts }],
+    ["#charBody", mountChar, { hp: hpOpts, onRoll: sheetRoll }],
     ["#spellBody", mountBook, { canEdit: true, library }],
     ["#noteBody", mountNotes, { canEdit: true }],
   ]) {
@@ -483,14 +500,28 @@ function renderCamp() {
 }
 
 async function sendInit(value, note) {
+  let ok = true;
   try {
     await call(`initiative/${room}`, { method: "POST", body: { id: me, init: value }, ...auth() });
     initMsg = note;
   } catch (err) {
-    if (err.status === 401) { logout("Your login changed, so please sign in again."); return; }
+    if (err.status === 401) { logout("Your login changed, so please sign in again."); return false; }
     initMsg = err.message;
+    ok = false;
   }
   renderSheet(true);
+  return ok;
+}
+
+/* Rolls made by tapping the character sheet: everyone's DM sees them in the roll feed, and an
+   initiative roll also goes straight into the DM's initiative list. */
+async function sheetRoll(r) {
+  postRoll(r);
+  if (r.kind === "initiative") {
+    const ok = await sendInit(r.total, `You rolled ${r.detail} = ${r.total}. Sent to the DM.`);
+    return ok ? "Sent to your DM's initiative list." : "Couldn't send that to your DM's initiative list.";
+  }
+  return undefined;
 }
 
 $("#sheet").addEventListener("click", (e) => {

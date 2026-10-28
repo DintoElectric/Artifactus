@@ -4,6 +4,13 @@ export const TYPES = {
   enemy: { label: "Enemy", color: "#d9525f" },
 };
 
+/* The signed-in account (one login for running campaigns and for playing characters). */
+export const getAccount = () => {
+  try { return JSON.parse(localStorage.getItem("account") || localStorage.getItem("dmAccount") || "null"); } catch { return null; }
+};
+export const setAccount = (a) => { localStorage.setItem("account", JSON.stringify(a)); localStorage.removeItem("dmAccount"); };
+export const clearAccount = () => { localStorage.removeItem("account"); localStorage.removeItem("dmAccount"); };
+
 export const PING_TTL = 8000;   // how long a ping stays on the map (milliseconds)
 /* A steady colour for each person, so their pings and move ghosts are easy to tell apart. */
 export const pingColor = (key) => {

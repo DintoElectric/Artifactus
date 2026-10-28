@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#161b25">
+<title>Character · DM Table</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Alegreya:ital,wght@0,500;0,700;1,500&family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script>
+/* If the page's scripts can't start (a missing or out-of-date file after an update), say so instead of showing a blank screen. */
+(function () {
+  var shown = false;
+  function show(detail) {
+    if (shown || window.__started) return;
+    shown = true;
+    var d = document.createElement("div");
+    d.className = "bootbanner";
+    d.setAttribute("role", "alert");
+    d.innerHTML = "<b>This page couldn't start.</b> A file may be missing or out of date after an update. Upload the complete set of project files, then refresh with Ctrl+Shift+R (Cmd+Shift+R on a Mac).<br><small></small>";
+    d.querySelector("small").textContent = "Detail: " + detail;
+    (document.body || document.documentElement).insertBefore(d, (document.body || document.documentElement).firstChild);
+  }
+  window.addEventListener("error", function (e) {
+    var t = e.target;
+    if (t && t !== window && t.tagName) { if (t.tagName === "SCRIPT") show("could not load " + String(t.src || "").split("/").pop()); return; }
+    show(e.message || "unknown error");
+  }, true);
+  window.addEventListener("unhandledrejection", function (e) { show(String((e.reason && e.reason.message) || e.reason)); });
+  setTimeout(function () { show("the page did not finish starting"); }, 15000);
+})();
+</script>
+</head>
+<body>
+<main class="charpage">
+  <header class="charhead">
+    <a class="btn small ghost" href="home.html">← My home</a>
+    <h1 id="charName">Character</h1>
+    <button class="btn small" id="renameBtn" type="button">Rename</button>
+  </header>
+  <nav class="seg hometabs" role="group" aria-label="Sections">
+    <button type="button" data-tab="sheet" aria-pressed="true">Sheet</button>
+    <button type="button" data-tab="spells" aria-pressed="false">Spells</button>
+    <button type="button" data-tab="notes" aria-pressed="false">Notes</button>
+  </nav>
+  <p class="hint" style="margin:0">Changes save automatically. HP is tracked by your DM during a campaign, so it isn't here.</p>
+  <section id="paneSheet"></section>
+  <section id="paneSpells" hidden></section>
+  <section id="paneNotes" hidden></section>
+</main>
+<dialog id="dlg"></dialog>
+<div class="toast" id="toast" role="status" hidden></div>
+<script type="module" src="character.js"></script>
+</body>
+</html>

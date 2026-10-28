@@ -43,6 +43,15 @@
 //   DELETE /api/account/campaigns/CODE   leave/delete it
 //   POST   /api/account/claim     add an older table to the account  { code, pin }
 //   POST   /api/account/password  change the password       { old, next } -> { token }
+//   GET    /api/account/characters        the account's character library
+//   POST   /api/account/characters        new character      { name } -> { id }
+//   PUT    /api/account/characters/ID     rename             { name }
+//   DELETE /api/account/characters/ID     delete (not while it is in a campaign)
+//   GET|PUT /api/account/char/ID          a character's sheet, notes, spells (compare-and-set on rev)
+//   POST   /api/account/join              ask to join a campaign with a character  { code, charId }
+//   DELETE /api/account/playing/CODE      leave a campaign, or cancel the request
+//   POST   /api/join/CODE                 DM answers a request     { action: "approve"|"deny", reqId, pid }
+//   DELETE /api/join/CODE/PID             DM unlinks a character from the table
 // A DM proves who they are with either the table PIN or "acct:<token>" in the x-pin header; the token only
 // works for tables the account owns. Player requests for a locked character carry the header x-player.
 import { getStore } from "@netlify/blobs";
@@ -267,7 +276,7 @@ async function acctFromToken(store, token) {
   return a && (await acctToken(a)) === `${id}.${sig}` ? a : null;
 }
 async function purgeRoom(store, room) {
-  const kinds = ["state", "map", "fog", "thumb", "img", "sub", "pcu", "mvreq", "pings", "roll", "sheet", "login", "lib", "camp", "locs", "meta"];
+  const kinds = ["state", "map", "fog", "thumb", "img", "sub", "pcu", "mvreq", "pings", "roll", "sheet", "login", "lib", "camp", "locs", "own", "joinreq", "meta"];
   for (const k of kinds) {
     const { blobs } = await store.list({ prefix: `${k}/${room}` });
     await Promise.all(blobs.map((b) => store.delete(b.key)));
@@ -389,8 +398,92 @@ export default async (req) => {
       const a = await acctFromToken(store, req.headers.get("x-acct"));
       if (!a) return fail(401, "Please sign in again.");
       const campaigns = () => [...a.campaigns].sort((x, y) => y.added - x.added);
+      a.characters ||= [];
+      a.playing ||= [];
+      const charKey = (id) => `char/${a.id}/${id}`;
+      const summaryOf = (doc) => { const i = readSheet(doc).char.info; return i.class ? `${i.class} ${i.level}` : `Level ${i.level}`; };
 
-      if (sub === "me" && req.method === "GET") return reply({ name: a.name, campaigns: campaigns() });
+      if (sub === "me" && req.method === "GET") {
+        const characters = await Promise.all(a.characters.map(async (c) => ({ id: c.id, name: c.name, summary: summaryOf(await store.get(charKey(c.id), { type: "json" })) })));
+        const playing = await Promise.all(a.playing.map(async (p) => {
+          const tmeta = await store.get(`meta/${p.code}`, { type: "json" });
+          const camp = tmeta ? await store.get(`camp/${p.code}`, { type: "json" }) : null;
+          return { code: p.code, charId: p.charId, charName: a.characters.find((c) => c.id === p.charId)?.name || "A character",
+            campaign: camp?.campaign?.name?.trim() || `Campaign ${p.code}`, status: tmeta ? p.status : "gone", t: p.t };
+        }));
+        return reply({ name: a.name, campaigns: campaigns(), characters, playing });
+      }
+
+      // ----- the player's character library -----
+      if (sub === "characters" && req.method === "POST") {
+        if (a.characters.length >= 30) return fail(400, "That's the most characters an account can hold.");
+        const name = str(body.name, 60).trim() || "New character";
+        const id = Math.random().toString(36).slice(2, 9);
+        await store.setJSON(charKey(id), { ...blankSheet(), name });
+        a.characters.push({ id, name, created: Date.now() });
+        await store.setJSON(acctKey(a.id), a);
+        return reply({ id, name });
+      }
+      if (sub === "characters" && (req.method === "PUT" || req.method === "DELETE")) {
+        const id = cleanId(rawId);
+        const c = a.characters.find((x) => x.id === id);
+        if (!c) return fail(404, "You don't have a character with that id.");
+        if (req.method === "PUT") {
+          const name = str(body.name, 60).trim();
+          if (!name) return fail(400, "Give the character a name.");
+          c.name = name;
+          const raw = await store.get(charKey(id), { type: "json" });
+          if (raw) await store.setJSON(charKey(id), { ...raw, name });
+          await store.setJSON(acctKey(a.id), a);
+          return reply({ ok: true });
+        }
+        if (a.playing.some((p) => p.charId === id && p.status !== "denied")) return fail(409, "Leave your campaigns with this character first.");
+        a.characters = a.characters.filter((x) => x.id !== id);
+        a.playing = a.playing.filter((p) => p.charId !== id);
+        await store.delete(charKey(id));
+        await store.setJSON(acctKey(a.id), a);
+        return reply({ ok: true });
+      }
+      if (sub === "char" && (req.method === "GET" || req.method === "PUT")) {
+        const id = cleanId(rawId);
+        if (!a.characters.some((x) => x.id === id)) return fail(404, "You don't have a character with that id.");
+        const raw = await store.get(charKey(id), { type: "json" });
+        const cur = readSheet(raw);
+        if (req.method === "GET") return reply({ sheet: cur });
+        const text = JSON.stringify(body);
+        if (text.length > 400000) return fail(413, "That sheet is too large.");
+        if (Number(body.rev || 0) !== (cur.rev || 0)) return reply({ error: "Changed elsewhere.", current: cur }, 409);
+        const out = { ...cleanSheet(body.sheet || {}), rev: (cur.rev || 0) + 1 };
+        await store.setJSON(charKey(id), { ...out, name: raw?.name || a.characters.find((x) => x.id === id).name });
+        return reply({ sheet: out });
+      }
+
+      // ----- joining a campaign is its own step: the DM decides -----
+      if (sub === "join" && req.method === "POST") {
+        const code = String(body.code || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+        const c = a.characters.find((x) => x.id === cleanId(body.charId));
+        if (!c) return fail(404, "Pick one of your characters.");
+        const tmeta = code && (await store.get(`meta/${code}`, { type: "json" }));
+        if (!tmeta) return fail(404, "No campaign with that code.");
+        const existing = a.playing.find((p) => p.code === code);
+        if (existing && existing.status !== "denied") return fail(409, existing.status === "pending" ? "You've already asked to join that campaign. Wait for the DM." : "You're already playing in that campaign.");
+        a.playing = a.playing.filter((p) => p.code !== code);
+        const reqId = `${a.id}.${c.id}`;
+        await store.setJSON(`joinreq/${code}/${reqId}`, { reqId, acct: a.id, acctName: a.name, charId: c.id, charName: c.name, summary: summaryOf(await store.get(charKey(c.id), { type: "json" })), t: Date.now() });
+        a.playing.push({ code, charId: c.id, status: "pending", t: Date.now() });
+        await store.setJSON(acctKey(a.id), a);
+        return reply({ ok: true });
+      }
+      if (sub === "playing" && req.method === "DELETE") {
+        const code = String(rawId || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+        const p = a.playing.find((x) => x.code === code);
+        if (!p) return fail(404, "You're not in that campaign.");
+        if (p.status === "pending") await store.delete(`joinreq/${code}/${a.id}.${p.charId}`);
+        if (p.status === "active" && p.pid) await store.setJSON(`own/${code}/${cleanId(p.pid)}`, { orphan: true });
+        a.playing = a.playing.filter((x) => x.code !== code);
+        await store.setJSON(acctKey(a.id), a);
+        return reply({ ok: true });
+      }
 
       if (sub === "campaigns" && req.method === "POST") {
         const name = str(body.name, 80).trim() || "New campaign";
@@ -469,12 +562,22 @@ export default async (req) => {
     };
     const dmOnly = async () => ((await isDm(req.headers.get("x-pin"))) ? null : fail(401, "Wrong PIN."));
     // Is this request allowed to act as the character? Open characters (no PIN set) always are.
+    // A character that came from a player's account belongs to that account (and the DM). Others use their PIN, if any.
+    const ownerOf = (pid) => store.get(`own/${room}/${cleanId(pid)}`, { type: "json" });
     const mayActAs = async (pid) => {
+      if (await isDm(req.headers.get("x-pin"))) return true;
+      const own = await ownerOf(pid);
+      if (own?.orphan) return false;   // its player left: only the DM can act for it now
+      if (own) { const acc = await acctFromToken(store, req.headers.get("x-acct")); return !!acc && acc.id === own.acct; }
       const login = await store.get(loginKey(room, pid), { type: "json" });
       if (!login) return true;
-      if (await isDm(req.headers.get("x-pin"))) return true;
       const tok = req.headers.get("x-player");
       return !!tok && tok === (await tokenOf(login));
+    };
+    // Where a character's sheet lives: in its owner's library if it came from an account, else with the table.
+    const sheetKeyFor = async (pid) => {
+      const own = await ownerOf(pid);
+      return own && !own.orphan ? `char/${own.acct}/${own.charId}` : `sheet/${room}/${pid}`;
     };
     const needLogin = () => fail(401, "Log in as this character first.");
 
@@ -604,8 +707,9 @@ export default async (req) => {
       const pid = cleanId(rawId);
       if (!pid) return fail(400, "Missing character id.");
       if (!(await mayActAs(pid))) return needLogin();
-      const key = `sheet/${room}/${pid}`;
-      const cur = readSheet(await store.get(key, { type: "json" }));
+      const key = await sheetKeyFor(pid);
+      const raw = await store.get(key, { type: "json" });
+      const cur = readSheet(raw);
       if (req.method === "GET") return reply({ sheet: cur });
       const text = await req.text();
       if (text.length > 400000) return fail(413, "That sheet is too large.");
@@ -615,7 +719,7 @@ export default async (req) => {
       if (!state?.ents?.some((x) => x.id === pid && x.type === "pc")) return fail(400, "Pick one of the player characters.");
       if (Number(body.rev || 0) !== (cur.rev || 0)) return reply({ error: "Changed elsewhere.", current: cur }, 409);
       const out = { ...cleanSheet(body.sheet || {}), rev: (cur.rev || 0) + 1 };
-      await store.setJSON(key, out);
+      await store.setJSON(key, raw?.name ? { ...out, name: raw.name } : out);
       return reply({ sheet: out });
     }
 
@@ -626,11 +730,27 @@ export default async (req) => {
       const { blobs } = await store.list({ prefix });
       const sheets = {};
       await Promise.all(blobs.map(async (b) => { sheets[b.key.slice(prefix.length)] = readSheet(await store.get(b.key, { type: "json" })); }));
+      // Characters that belong to a player's account keep their sheet in that player's library.
+      const ownPrefix = `own/${room}/`;
+      const owned = (await store.list({ prefix: ownPrefix })).blobs;
+      await Promise.all(owned.map(async (b) => {
+        const o = await store.get(b.key, { type: "json" });
+        if (o && !o.orphan) sheets[b.key.slice(ownPrefix.length)] = readSheet(await store.get(`char/${o.acct}/${o.charId}`, { type: "json" }));
+      }));
       return reply({ sheets });
     }
 
     if (route === "playerlogin" && req.method === "POST") {
       const { pid, pin } = await req.json().catch(() => ({}));
+      // Signed in with an account: log in as the character this account plays here.
+      if (req.headers.get("x-acct") && !pid) {
+        const acc = await acctFromToken(store, req.headers.get("x-acct"));
+        const play = acc && (acc.playing || []).find((p) => p.code === room && p.status === "active" && p.pid);
+        const state = await store.get(`state/${room}`, { type: "json" });
+        const e = play && state?.ents?.find((x) => x.id === play.pid && x.type === "pc");
+        if (!e) return fail(404, "None of your characters is in this campaign yet.");
+        return reply({ pid: e.id, name: e.name, token: null, viaAccount: true });
+      }
       const id = cleanId(pid);
       const state = await store.get(`state/${room}`, { type: "json" });
       const e = state?.ents?.find((x) => x.id === id && x.type === "pc");
@@ -776,6 +896,46 @@ export default async (req) => {
       return reply({ ok: true });
     }
 
+    // The DM answers a request from a player to join with one of their characters.
+    if (route === "join" && req.method === "POST") {
+      const denied = await dmOnly();
+      if (denied) return denied;
+      const { action, reqId, pid } = await req.json().catch(() => ({}));
+      if (!/^[0-9a-f]{16}\.[A-Za-z0-9]{1,24}$/.test(String(reqId))) return fail(400, "Bad request.");
+      const reqKey = `joinreq/${room}/${reqId}`;
+      const jr = await store.get(reqKey, { type: "json" });
+      if (!jr) return fail(404, "That request is gone. The player may have cancelled it.");
+      const acc = await store.get(acctKey(jr.acct), { type: "json" });
+      const entry = acc?.playing?.find((p) => p.code === room && p.charId === jr.charId);
+      if (action === "deny") {
+        if (entry) { entry.status = "denied"; await store.setJSON(acctKey(acc.id), acc); }
+        await store.delete(reqKey);
+        return reply({ ok: true });
+      }
+      const id = cleanId(pid);
+      if (action !== "approve" || !id) return fail(400, "Bad request.");
+      const char = acc?.characters?.find((c) => c.id === jr.charId);
+      if (!acc || !char || !entry) { await store.delete(reqKey); return fail(410, "That character no longer exists."); }
+      if (await ownerOf(id)) return fail(409, "That character slot is already taken.");
+      await store.setJSON(`own/${room}/${id}`, { acct: acc.id, charId: char.id });
+      entry.status = "active";
+      entry.pid = id;
+      await store.setJSON(acctKey(acc.id), acc);
+      await store.delete(reqKey);
+      return reply({ ok: true, name: char.name, player: acc.name, summary: jr.summary || "" });
+    }
+    if (route === "join" && req.method === "DELETE") {
+      const denied = await dmOnly();
+      if (denied) return denied;
+      const id = cleanId(rawId);
+      const own = id && (await ownerOf(id));
+      if (!own) return reply({ ok: true });
+      await store.setJSON(`own/${room}/${id}`, { orphan: true });
+      const acc = own.acct && (await store.get(acctKey(own.acct), { type: "json" }));
+      if (acc) { acc.playing = (acc.playing || []).filter((p) => !(p.code === room && p.pid === id)); await store.setJSON(acctKey(acc.id), acc); }
+      return reply({ ok: true });
+    }
+
     if (route === "subs" && req.method === "GET") {
       const denied = await dmOnly();
       if (denied) return denied;
@@ -784,8 +944,8 @@ export default async (req) => {
         const items = await Promise.all(blobs.map((b) => store.get(b.key, { type: "json" })));
         return items.filter(Boolean).map((x) => ({ ...x, kind }));
       };
-      const [inits, hps, moves] = await Promise.all([read(`sub/${room}/`, "init"), read(`pcu/${room}/`, "hp"), read(`mvreq/${room}/`, "move")]);
-      return reply([...inits, ...hps, ...moves]);
+      const [inits, hps, moves, joins] = await Promise.all([read(`sub/${room}/`, "init"), read(`pcu/${room}/`, "hp"), read(`mvreq/${room}/`, "move"), read(`joinreq/${room}/`, "join")]);
+      return reply([...inits, ...hps, ...moves, ...joins]);
     }
 
     return fail(404, "Not found.");

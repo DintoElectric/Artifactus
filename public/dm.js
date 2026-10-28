@@ -157,6 +157,7 @@ function renderMap() {
   $("#mapOn").checked = !!state.mapOn;
   $("#freeExplore").checked = !!state.freeExplore;
   $("#autoApprove").checked = !!state.autoApprove;
+  $("#autoJoin").checked = !!state.autoJoin;
   const sz = $("#gridSize");
   sz.max = Math.max(40, Math.round(Math.max(state.mapW, state.mapH) / 6));
   sz.value = state.grid.size;
@@ -172,6 +173,7 @@ $("#fit").onclick = () => mv.fit();
 $("#mapOn").onchange = (e) => { state.mapOn = e.target.checked; changed(); };
 $("#freeExplore").onchange = (e) => { state.freeExplore = e.target.checked; changed(); };
 $("#autoApprove").onchange = (e) => { state.autoApprove = e.target.checked; changed(); };
+$("#autoJoin").onchange = (e) => { state.autoJoin = e.target.checked; changed(); updateJoins(pendingJoins); };
 $("#gridOn").onchange = (e) => { state.grid.on = e.target.checked; changed(); };
 $("#snapOn").onchange = (e) => { state.grid.snap = e.target.checked; bump(); scheduleSave(); renderMap(); };
 function gridChanged() {
@@ -472,6 +474,7 @@ function deleteToken(id) {
   const gone = ent(id);
   if (gone?.img) removeTokenImage(gone);
   if (gone?.locked) call(`logins/${room}/${id}`, { method: "DELETE", pin }).catch(() => {});
+  if (gone?.acct) call(`join/${room}/${id}`, { method: "DELETE", pin }).catch(() => {});
   returnItemsToStash(id);
   state.ents = state.ents.filter((e) => e.id !== id);
   removeFromInit(id, false);
@@ -815,7 +818,8 @@ function renderParty() {
       store.load();
     }
     o.el.querySelector("h2").textContent = pc.name;
-    o.el.querySelector(".lock").textContent = pc.locked ? "PIN set" : "Open to anyone";
+    o.el.querySelector(".lock").textContent = pc.acct ? `Played by ${pc.player || "a player"}` : pc.locked ? "PIN set" : "Open to anyone";
+    o.el.querySelector('[data-act="login"]').hidden = !!pc.acct;
   }
   let empty = box.querySelector(".empty");
   if (!pcs.length) {
@@ -1042,6 +1046,57 @@ $("#objList").addEventListener("change", (e) => {
   }
 });
 
+/* ---------- players asking to join with a character from their own account ---------- */
+let pendingJoins = [];
+const handledJoins = new Set();
+let lastJoinKey = "";
+
+function renderJoins() {
+  $("#joinList").innerHTML = pendingJoins.length ? pendingJoins.map((j) => `
+    <li class="mrow" data-req="${esc(j.reqId)}">
+      <span class="mname"><b>${esc(j.charName)}</b> <small>${esc(j.summary)} · played by ${esc(j.acctName)}</small></span>
+      <button class="btn small primary" data-act="approve">Accept</button>
+      <button class="btn small" data-act="deny">Decline</button>
+    </li>`).join("") : '<li class="empty">Players with accounts can ask to join with one of their characters. Their request shows up here.</li>';
+}
+
+async function resolveJoin(j, ok) {
+  handledJoins.add(j.reqId);
+  pendingJoins = pendingJoins.filter((x) => x.reqId !== j.reqId);
+  renderJoins();
+  try {
+    if (!ok) {
+      await call(`join/${room}`, { method: "POST", body: { action: "deny", reqId: j.reqId }, pin });
+      toast(`Declined ${j.charName}.`);
+      return;
+    }
+    const pid = uid();
+    const r = await call(`join/${room}`, { method: "POST", body: { action: "approve", reqId: j.reqId, pid }, pin });
+    const c = mv.centerPoint() || { x: 0.5, y: 0.5 };
+    state.ents.push({ id: pid, name: r.name, type: "pc", x: c.x, y: c.y, size: 1, hp: null, maxHp: null, hidden: false, down: false, acct: true, player: r.player });
+    state.inv[pid] = [];
+    changed();
+    toast(`${r.player} joined as ${r.name}. Their token is in the middle of the map.`);
+  } catch (err) {
+    handledJoins.delete(j.reqId);
+    toast(err.message);
+  }
+}
+
+$("#joinList").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-act]");
+  const row = e.target.closest("[data-req]");
+  const j = b && row && pendingJoins.find((x) => x.reqId === row.dataset.req);
+  if (j) resolveJoin(j, b.dataset.act === "approve");
+});
+
+function updateJoins(list) {
+  pendingJoins = list.filter((j) => !handledJoins.has(j.reqId));
+  if (state.autoJoin) { for (const j of [...pendingJoins]) resolveJoin(j, true); return; }
+  const key = JSON.stringify(pendingJoins.map((j) => j.reqId));
+  if (key !== lastJoinKey) { lastJoinKey = key; renderJoins(); }
+}
+
 /* ---------- pings and move requests from players ---------- */
 let dmPings = [];        // pings on the map right now: { id, x, y, label, color, expires }
 let pendingMoves = [];   // move requests waiting for a decision (from the server)
@@ -1131,9 +1186,10 @@ async function pullSubs() {
   try {
     const subs = await call(`subs/${room}`, { pin });
     updateMoves(subs.filter((s) => s.kind === "move"));
+    updateJoins(subs.filter((s) => s.kind === "join"));
     const seen = state.subT || 0;
     let maxT = seen, applied = 0;
-    for (const sub of [...subs].filter((s) => s.kind !== "move").sort((a, b) => a.t - b.t)) {
+    for (const sub of [...subs].filter((s) => s.kind !== "move" && s.kind !== "join").sort((a, b) => a.t - b.t)) {
       if (sub.t <= seen) continue;
       maxT = Math.max(maxT, sub.t);
       const e = ent(sub.id);
@@ -1211,7 +1267,7 @@ async function leaveTable(where) {
 
 $("#leave").textContent = viaAccount ? "All campaigns" : "Leave";
 $("#leave").onclick = () => {
-  if (viaAccount) { leaveTable("dm-home.html"); return; }
+  if (viaAccount) { leaveTable("home.html"); return; }
   openDlg(`
     <form>
       <h2>Leave this table?</h2>
@@ -1237,6 +1293,7 @@ $("#leave").onclick = () => {
     state.feedOn ??= false;
     state.campRev ??= 0;
     state.freeExplore ??= false;
+    state.autoJoin ??= false;
     state.autoApprove ??= false;
     state.moveResults ||= {};
     state.locId ??= "";
@@ -1269,11 +1326,12 @@ $("#leave").onclick = () => {
     setInterval(() => { pullSubs(); pullFeed(); }, 3000);
     setInterval(pollPings, 1500);
     renderMoves();
+    renderJoins();
     setInterval(pullSheets, 4000);
   } catch (err) {
     if (err.status === 401 || err.status === 404) {
       localStorage.removeItem("dmTable");
-      location.replace(viaAccount ? "dm-home.html" : "/");
+      location.replace(viaAccount ? "home.html" : "/");
     } else {
       document.body.innerHTML = `<p style="padding:2rem">Could not load the table: ${esc(err.message)}. Refresh to try again.</p>`;
     }

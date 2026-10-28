@@ -9,9 +9,10 @@ const clone = (o) => JSON.parse(JSON.stringify(o));
 export const blankSheet = () => ({ rev: 0, notes: [], slots: {}, spells: [], char: blankChar() });
 
 export class SheetStore {
-  constructor(room, pid, auth = {}) {
+  constructor(room, pid, auth = {}, path = null) {
     this.room = room;
     this.pid = pid;
+    this.path = path || `sheet/${room}/${pid}`;   // a character in a table, or one in a player's own library
     this.auth = auth;        // { pin } for the DM, { token } for a logged-in player
     this.dead = false;       // set when the server says the login is no longer valid
     this.base = blankSheet();
@@ -46,7 +47,7 @@ export class SheetStore {
 
   async load() {
     try {
-      const r = await call(`sheet/${this.room}/${this.pid}`, this.auth);
+      const r = await call(this.path, this.auth);
       if (!this.adopt(r.sheet) && !this.loaded) { this.loaded = true; this.emit(); }
     } catch (e) {
       if (e.status === 401) { this.dead = true; this.status = "auth"; this.emit(); }
@@ -78,7 +79,7 @@ export class SheetStore {
     try {
       const next = clone(this.base);
       batch.forEach((o) => o.fn(next));
-      const r = await call(`sheet/${this.room}/${this.pid}`, { method: "PUT", body: { rev: this.base.rev, sheet: next }, ...this.auth });
+      const r = await call(this.path, { method: "PUT", body: { rev: this.base.rev, sheet: next }, ...this.auth });
       this.base = r.sheet;
       this.ops.splice(0, batch.length);
       this.status = this.ops.length ? "saving" : "saved";
@@ -121,7 +122,7 @@ export function mountBook(root, store, { canEdit = true, library = null } = {}) 
   const picker = () => {
     if (!picking || !library) return "";
     if (!library.loaded) return '<div class="picker"><p class="empty">Loading spells…</p></div>';
-    if (!library.list.length) return '<div class="picker"><p class="empty">No spell library yet. Ask your DM to import one.</p></div>';
+    if (!library.list.length) return `<div class="picker"><p class="empty">${library.room ? "No spell library yet. Ask your DM to import one." : "No spell list is built in yet. Add spells manually."}</p></div>`;
     return `<div class="picker">
       <div class="row">
         <input type="text" data-f="q" placeholder="Search ${library.list.length} spells" value="${esc(pq)}" aria-label="Search spells" autocomplete="off">
