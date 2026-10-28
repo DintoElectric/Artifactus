@@ -24,9 +24,10 @@ export const initials = (name) => {
   return (w.length === 1 ? w[0].slice(0, 2) : w[0][0] + w[1][0]).toUpperCase();
 };
 
-export async function call(path, { method = "GET", body, pin, token } = {}) {
+export async function call(path, { method = "GET", body, pin, token, acct } = {}) {
   const headers = {};
   if (pin) headers["x-pin"] = pin;
+  if (acct) headers["x-acct"] = acct;
   if (token) headers["x-player"] = token;
   let payload;
   if (body instanceof Blob) {
@@ -46,6 +47,40 @@ export async function call(path, { method = "GET", body, pin, token } = {}) {
     throw err;
   }
   return res.json();
+}
+
+/* ---------- perspective grid maths ----------
+   A perspective grid is the flat grid seen through a camera: the four corners of the grid are dragged onto the
+   floor of the picture, and every line in between follows (a "homography"). Straight lines stay straight, and
+   squares get smaller toward the far side. */
+export const defaultPersp = () => ({ quad: [[0.32, 0.12], [0.68, 0.12], [0.92, 0.92], [0.08, 0.92]], cols: 10, rows: 18 });
+
+/* Matrix (row-major, 9 numbers) taking the unit square (0,0)(1,0)(1,1)(0,1) onto four points. */
+function squareToQuad(P) {
+  const [[x0, y0], [x1, y1], [x2, y2], [x3, y3]] = P;
+  const dx1 = x1 - x2, dx2 = x3 - x2, dx3 = x0 - x1 + x2 - x3;
+  const dy1 = y1 - y2, dy2 = y3 - y2, dy3 = y0 - y1 + y2 - y3;
+  let g = 0, h = 0;
+  if (Math.abs(dx3) > 1e-9 || Math.abs(dy3) > 1e-9) {
+    const det = dx1 * dy2 - dx2 * dy1;
+    if (Math.abs(det) < 1e-9) return null;
+    g = (dx3 * dy2 - dx2 * dy3) / det;
+    h = (dx1 * dy3 - dx3 * dy1) / det;
+  }
+  return [x1 - x0 + g * x1, x3 - x0 + h * x3, x0, y1 - y0 + g * y1, y3 - y0 + h * y3, y0, g, h, 1];
+}
+function invert3(M) {
+  const [a, b, c, d, e, f, g, h, i] = M;
+  const A = e * i - f * h, B = -(d * i - f * g), C = d * h - e * g;
+  const det = a * A + b * B + c * C;
+  if (Math.abs(det) < 1e-12) return null;
+  return [A, -(b * i - c * h), b * f - c * e, B, a * i - c * g, -(a * f - c * d), C, -(a * h - b * g), a * e - b * d].map((v) => v / det);
+}
+/* Apply the matrix to (u, v). Returns [x, y, w]; w > 0 means the point is in front of the camera. */
+function project(M, u, v) {
+  const w = M[6] * u + M[7] * v + M[8];
+  if (Math.abs(w) < 1e-12) return null;
+  return [(M[0] * u + M[1] * v + M[2]) / w, (M[3] * u + M[4] * v + M[5]) / w, w];
 }
 
 /* A pan/zoom map with draggable tokens. Token positions are stored as 0..1 fractions of the image. */
@@ -74,6 +109,8 @@ export class MapView {
     this.paintMode = null;   // null, "reveal" or "hide" (DM only)
     this.brush = 0.05;       // brush radius as a fraction of map width
     this.stroke = null;
+    this.perspMode = false;  // DM: drag the four corners of the perspective grid
+    this._pk = ""; this._pv = null;
     this.moveGrid = false;   // DM: drag to slide the grid under the map
     this.shapeMode = false;  // DM: click to outline where the grid should show
     this.draft = [];         // outline in progress (normalised points)
@@ -179,7 +216,7 @@ export class MapView {
         this.tokLayer.appendChild(el);
         this.els.set(e.id, el);
       }
-      const s = g * (e.size || 1);
+      const s = this.cellSizeAt(e.x, e.y) * (e.size || 1);
       el.style.setProperty("--s", s + "px");
       el.style.setProperty("--c", TYPES[e.type]?.color || "#999");
       el.style.width = el.style.height = s + "px";
@@ -277,9 +314,59 @@ export class MapView {
     });
   }
 
+  /* The perspective grid's maths for the current corners, or null when the grid is flat (or the corners are unusable). */
+  persp() {
+    const g = this.grid, { w, h } = this.dim;
+    if (g.mode !== "perspective" || !w || !Array.isArray(g.quad) || g.quad.length !== 4) return null;
+    const key = `${w}x${h}|${g.cols}|${g.rows}|${JSON.stringify(g.quad)}`;
+    if (key === this._pk) return this._pv;
+    this._pk = key;
+    this._pv = null;
+    const H = squareToQuad(g.quad.map(([x, y]) => [x * w, y * h]));
+    if (!H) return null;
+    let Hi = invert3(H);
+    if (!Hi) return null;
+    const mid = project(H, 0.5, 0.5);
+    const back = mid && project(Hi, mid[0], mid[1]);
+    if (back && back[2] < 0) Hi = Hi.map((v) => -v);    // keep "in front of the camera" positive
+    const cols = Math.max(1, Math.round(g.cols) || 10), rows = Math.max(1, Math.round(g.rows) || 10);
+    this._pv = { H, Hi, cols, rows };
+    return this._pv;
+  }
+
+  /* Where grid point (U, V), counted in squares from the first corner, lands on the picture (in pixels). */
+  gridPt(P, U, V) {
+    const r = project(P.H, U / P.cols, V / P.rows);
+    return r && r[2] > 0 ? [r[0], r[1]] : null;
+  }
+
+  /* Which grid square (U, V) is this spot on the picture? null if it's past the horizon. */
+  gridUV(P, nx, ny) {
+    const r = project(P.Hi, nx * this.dim.w, ny * this.dim.h);
+    return r && r[2] > 0 ? [r[0] * P.cols, r[1] * P.rows] : null;
+  }
+
+  /* How big (in picture pixels) is one grid square at this spot? Shrinks toward the far side of a perspective grid. */
+  cellSizeAt(nx, ny) {
+    const flat = Math.max(8, this.grid.size || 60);
+    const P = this.persp();
+    if (!P) return flat;
+    const uv = this.gridUV(P, nx, ny);
+    if (!uv) return 10;
+    const a = this.gridPt(P, uv[0] - 0.5, uv[1]), b = this.gridPt(P, uv[0] + 0.5, uv[1]);
+    if (!a || !b) return 10;
+    return clamp(Math.hypot(a[0] - b[0], a[1] - b[1]), 10, this.dim.w * 0.25);
+  }
+
   /* Snap a spot to the middle of its grid square when snapping is on. */
   snapPoint(nx, ny) {
     if (!(this.grid.snap && this.grid.on) || !this.dim.w) return { x: nx, y: ny };
+    const P = this.persp();
+    if (P) {
+      const uv = this.gridUV(P, nx, ny);
+      const pt = uv && this.gridPt(P, Math.floor(uv[0]) + 0.5, Math.floor(uv[1]) + 0.5);
+      return pt ? { x: clamp(pt[0] / this.dim.w, 0, 1), y: clamp(pt[1] / this.dim.h, 0, 1) } : { x: nx, y: ny };
+    }
     const g = this.grid.size, ox = this.grid.ox || 0, oy = this.grid.oy || 0;
     const wx = (Math.floor((nx * this.dim.w - ox) / g) + 0.5) * g + ox;
     const wy = (Math.floor((ny * this.dim.h - oy) / g) + 0.5) * g + oy;
@@ -310,16 +397,16 @@ export class MapView {
     const { w, h } = this.dim;
     const svg = this.overEl;
     if (!w) { svg.innerHTML = ""; this.overKey = ""; return; }
-    const key = JSON.stringify([this.overlay, this.grid.size]);
+    const key = JSON.stringify([this.overlay, this.grid.size, this.grid.mode, this.grid.quad, this.grid.cols, this.grid.rows]);
     if (!force && key === this.overKey) return;
     this.overKey = key;
     svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
     svg.style.width = w + "px";
     svg.style.height = h + "px";
-    const g = Math.max(8, this.grid.size || 60), fs = g * 0.3;
     let out = "";
     for (const m of this.overlay.moves) {
       const x = m.x * w, y = m.y * h;
+      const g = this.cellSizeAt(m.x, m.y), fs = g * 0.3;
       out += `<g class="ghost" style="--c:${m.color}">`;
       if (m.fromX != null) out += `<line x1="${m.fromX * w}" y1="${m.fromY * h}" x2="${x}" y2="${y}" stroke-width="${g * 0.07}" stroke-dasharray="${g * 0.2} ${g * 0.15}"/>`;
       out += `<circle cx="${x}" cy="${y}" r="${g * 0.45}" stroke-width="${g * 0.08}" stroke-dasharray="${g * 0.18} ${g * 0.12}"/>`;
@@ -327,6 +414,7 @@ export class MapView {
     }
     for (const p of this.overlay.pings) {
       const x = p.x * w, y = p.y * h;
+      const g = this.cellSizeAt(p.x, p.y), fs = g * 0.3;
       out += `<g class="ping" style="--c:${p.color}"><circle class="r r1" cx="${x}" cy="${y}" r="${g * 0.4}" stroke-width="${g * 0.09}"/>` +
         `<circle class="r r2" cx="${x}" cy="${y}" r="${g * 0.4}" stroke-width="${g * 0.09}"/><circle class="dot" cx="${x}" cy="${y}" r="${g * 0.1}"/>` +
         `<text x="${x}" y="${y - g * 0.55}" font-size="${fs}" text-anchor="middle">${esc(p.label || "")}</text></g>`;
@@ -367,14 +455,40 @@ export class MapView {
     const { w, h } = this.dim;
     const gr = this.grid;
     const el = this.gridEl;
-    if (!w || !gr.on) { el.style.backgroundImage = "none"; el.style.clipPath = "none"; return; }
+    if (!w || !gr.on) {
+      el.style.backgroundImage = "none"; el.style.clipPath = "none";
+      if (el._persp) { el.innerHTML = ""; el._persp = false; }
+      return;
+    }
     const g = Math.max(8, gr.size || 60);
     const op = clamp(gr.opacity ?? 0.3, 0.03, 1);
     const line = `rgba(${gr.dark ? "0,0,0" : "255,255,255"},${op})`;
-    el.style.backgroundImage =
-      `linear-gradient(to right,${line} 2px,transparent 2px),linear-gradient(to bottom,${line} 2px,transparent 2px)`;
-    el.style.backgroundSize = `${g}px ${g}px`;
-    el.style.backgroundPosition = `${gr.ox || 0}px ${gr.oy || 0}px`;
+    const P = gr.mode === "perspective" ? this.persp() : null;
+    if (P) {
+      // Perspective: draw each grid line from its projected end points; far lines are drawn thinner.
+      el.style.backgroundImage = "none";
+      let lines = "";
+      const widthAt = (V) => {
+        const a = this.gridPt(P, P.cols / 2 - 0.5, V), b = this.gridPt(P, P.cols / 2 + 0.5, V);
+        return a && b ? clamp(Math.hypot(a[0] - b[0], a[1] - b[1]) * 0.035, 1, 3.2) : 1.5;
+      };
+      for (let i = 0; i <= P.cols; i++) {
+        const a = this.gridPt(P, i, 0), b = this.gridPt(P, i, P.rows);
+        if (a && b) lines += `<line x1="${a[0].toFixed(1)}" y1="${a[1].toFixed(1)}" x2="${b[0].toFixed(1)}" y2="${b[1].toFixed(1)}" stroke-width="${widthAt(P.rows / 2).toFixed(2)}"/>`;
+      }
+      for (let j = 0; j <= P.rows; j++) {
+        const a = this.gridPt(P, 0, j), b = this.gridPt(P, P.cols, j);
+        if (a && b) lines += `<line x1="${a[0].toFixed(1)}" y1="${a[1].toFixed(1)}" x2="${b[0].toFixed(1)}" y2="${b[1].toFixed(1)}" stroke-width="${widthAt(j).toFixed(2)}"/>`;
+      }
+      el.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" style="position:absolute;left:0;top:0;overflow:hidden" stroke="${line}" fill="none">${lines}</svg>`;
+      el._persp = true;
+    } else {
+      if (el._persp) { el.innerHTML = ""; el._persp = false; }
+      el.style.backgroundImage =
+        `linear-gradient(to right,${line} 2px,transparent 2px),linear-gradient(to bottom,${line} 2px,transparent 2px)`;
+      el.style.backgroundSize = `${g}px ${g}px`;
+      el.style.backgroundPosition = `${gr.ox || 0}px ${gr.oy || 0}px`;
+    }
     const areas = (gr.areas || []).filter((a) => a.length >= 3);
     if (!areas.length) { el.style.clipPath = "none"; return; }
     const d = areas.map((poly) => {
@@ -390,7 +504,7 @@ export class MapView {
   renderShapes() {
     const svg = this.shapeEl;
     const { w, h } = this.dim;
-    if (!this.shapeMode || !w) { svg.style.display = "none"; svg.innerHTML = ""; return; }
+    if (!(this.shapeMode || this.perspMode) || !w) { svg.style.display = "none"; svg.innerHTML = ""; return; }
     this._shapeK = this.view.k;
     svg.style.display = "block";
     svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
@@ -399,13 +513,20 @@ export class MapView {
     const k = this.view.k, r = 9 / k, sw = 2 / k;
     const pts = (poly) => poly.map((p) => `${p[0] * w},${p[1] * h}`).join(" ");
     let out = "";
-    (this.grid.areas || []).forEach((poly, a) => {
+    if (this.perspMode && Array.isArray(this.grid.quad)) {
+      const q = this.grid.quad;
+      out += `<polygon points="${pts(q)}" fill="rgba(79,179,214,.10)" stroke="#4fb3d6" stroke-width="${sw}" stroke-dasharray="${8 / k} ${5 / k}"/>`;
+      q.forEach((p, i) => {
+        out += `<circle class="vtx" data-a="q" data-i="${i}" cx="${p[0] * w}" cy="${p[1] * h}" r="${r * 1.25}" fill="#4fb3d6" stroke="#161b25" stroke-width="${sw}"/>`;
+      });
+    }
+    if (this.shapeMode) (this.grid.areas || []).forEach((poly, a) => {
       out += `<polygon points="${pts(poly)}" fill="rgba(212,170,92,.14)" stroke="#d4aa5c" stroke-width="${sw}"/>`;
       poly.forEach((p, i) => {
         out += `<circle class="vtx" data-a="${a}" data-i="${i}" cx="${p[0] * w}" cy="${p[1] * h}" r="${r}" fill="#d4aa5c" stroke="#161b25" stroke-width="${sw}"/>`;
       });
     });
-    if (this.draft.length) {
+    if (this.shapeMode && this.draft.length) {
       out += `<polyline points="${pts(this.draft)}" fill="none" stroke="#fff" stroke-width="${sw}" stroke-dasharray="${6 / k} ${4 / k}"/>`;
       this.draft.forEach((p, i) => {
         out += `<circle class="vtx" data-a="d" data-i="${i}" cx="${p[0] * w}" cy="${p[1] * h}" r="${r}" fill="#fff" stroke="#161b25" stroke-width="${sw}"/>`;
@@ -478,16 +599,13 @@ export class MapView {
     this.apply();
   }
 
-  toNorm(cx, cy, snap) {
+  toNorm(cx, cy, snap, free = false) {
     const r = this.root.getBoundingClientRect();
-    let wx = (cx - r.left - this.view.x) / this.view.k;
-    let wy = (cy - r.top - this.view.y) / this.view.k;
-    if (snap && this.grid.snap && this.grid.on) {
-      const g = this.grid.size, ox = this.grid.ox || 0, oy = this.grid.oy || 0;
-      wx = (Math.floor((wx - ox) / g) + 0.5) * g + ox;
-      wy = (Math.floor((wy - oy) / g) + 0.5) * g + oy;
-    }
-    return { x: clamp(wx / this.dim.w, 0, 1), y: clamp(wy / this.dim.h, 0, 1) };
+    const wx = (cx - r.left - this.view.x) / this.view.k;
+    const wy = (cy - r.top - this.view.y) / this.view.k;
+    let nx = wx / this.dim.w, ny = wy / this.dim.h;
+    if (snap && this.grid.snap && this.grid.on) { const p = this.snapPoint(nx, ny); nx = p.x; ny = p.y; }
+    return free ? { x: nx, y: ny } : { x: clamp(nx, 0, 1), y: clamp(ny, 0, 1) };
   }
 
   centerPoint() {
@@ -509,7 +627,7 @@ export class MapView {
   down(e) {
     if (e.pointerType === "mouse" && e.button !== 0) return;
     const tokEl = e.target.closest?.(".tok");
-    if (this.shapeMode && this.interactive) {
+    if ((this.shapeMode || this.perspMode) && this.interactive) {
       const v = e.target.closest?.(".vtx");
       if (v && this.pointers.size === 0 && !this.vdrag) {
         this.vdrag = { a: v.dataset.a, i: Number(v.dataset.i), pid: e.pointerId, moved: false };
@@ -543,12 +661,13 @@ export class MapView {
   move(e) {
     const vd = this.vdrag;
     if (vd && e.pointerId === vd.pid) {
-      const p = this.toNorm(e.clientX, e.clientY, false);
-      const poly = vd.a === "d" ? this.draft : this.grid.areas?.[Number(vd.a)];
+      const p = this.toNorm(e.clientX, e.clientY, false, vd.a === "q");
+      const poly = vd.a === "q" ? this.grid.quad : vd.a === "d" ? this.draft : this.grid.areas?.[Number(vd.a)];
       if (poly && poly[vd.i]) {
-        poly[vd.i] = [p.x, p.y];
+        poly[vd.i] = vd.a === "q" ? [clamp(p.x, -0.5, 1.5), clamp(p.y, -0.5, 1.5)] : [p.x, p.y];
         vd.moved = true;
-        this.renderGrid(); this.renderShapes();
+        if (vd.a === "q") this.render();          // token sizes follow the corners as you drag
+        else { this.renderGrid(); this.renderShapes(); }
       }
       return;
     }
@@ -574,7 +693,9 @@ export class MapView {
       d.moved = true;
       const p = this.toNorm(e.clientX, e.clientY, true);
       d.x = p.x; d.y = p.y;
-      const s = parseFloat(d.el.style.width);
+      const ent = this.ents.find((x) => x.id === d.id);
+      const s = this.persp() ? this.cellSizeAt(p.x, p.y) * (ent?.size || 1) : parseFloat(d.el.style.width);
+      if (this.persp()) { d.el.style.setProperty("--s", s + "px"); d.el.style.width = d.el.style.height = s + "px"; }
       d.el.style.left = p.x * this.dim.w - s / 2 + "px";
       d.el.style.top = p.y * this.dim.h - s / 2 + "px";
       this.cb.onMove?.(d.id, p.x, p.y);

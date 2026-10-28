@@ -1,4 +1,4 @@
-import { call, uid, esc, clamp, TYPES, MapView, pingColor, PING_TTL } from "./common.js";
+import { call, uid, esc, clamp, TYPES, MapView, pingColor, PING_TTL, defaultPersp } from "./common.js";
 import { mountRoller } from "./dice.js";
 import { SheetStore, mountBook, mountNotes, blankSheet } from "./sheet.js";
 import { Library, parseSpells } from "./library.js";
@@ -10,6 +10,7 @@ const $ = (s, r = document) => r.querySelector(s);
 const saved = JSON.parse(localStorage.getItem("dmTable") || "null");
 if (!saved) { location.replace("/"); throw new Error("No table"); }
 const { room, pin } = saved;
+const viaAccount = saved.via === "account";   // signed in with a DM account (otherwise: table code and PIN)
 
 let state = null;
 let tab = "map";
@@ -145,6 +146,12 @@ function renderMap() {
   $("#gridBar").hidden = !state.grid.on;
   $("#gridOpacity").value = Math.round((state.grid.opacity ?? 0.3) * 100);
   $("#gridDark").checked = !!state.grid.dark;
+  const persp = state.grid.mode === "perspective";
+  $("#gridType").value = persp ? "perspective" : "flat";
+  $("#perspCtl").hidden = !persp;
+  $("#flatCtl").hidden = persp;
+  $("#sizeWrap").hidden = persp;
+  if (persp) { $("#gridCols").value = state.grid.cols ?? 10; $("#gridRows").value = state.grid.rows ?? 18; }
   $("#snapOn").checked = !!state.grid.snap;
   $("#mapOn").checked = !!state.mapOn;
   $("#freeExplore").checked = !!state.freeExplore;
@@ -184,6 +191,24 @@ $("#gridBar").addEventListener("click", (e) => {
   gridChanged();
 });
 $("#alignBtn").onclick = () => setMode("align");
+
+/* Perspective grid: drag four corners onto the floor of the map; squares shrink toward the far side. */
+function startPersp() {
+  const d = defaultPersp();
+  state.grid.mode = "perspective";
+  state.grid.quad ||= d.quad;
+  state.grid.cols ||= d.cols;
+  state.grid.rows ||= d.rows;
+}
+$("#gridType").onchange = (e) => {
+  if (e.target.value === "perspective") { startPersp(); mode = "persp"; }
+  else { state.grid.mode = "flat"; if (mode === "persp") mode = "none"; }
+  changed();
+};
+$("#perspBtn").onclick = () => setMode("persp");
+$("#gridCols").addEventListener("input", (e) => { const n = parseInt(e.target.value); if (n >= 1) { state.grid.cols = Math.min(120, n); gridChanged(); } });
+$("#gridRows").addEventListener("input", (e) => { const n = parseInt(e.target.value); if (n >= 1) { state.grid.rows = Math.min(120, n); gridChanged(); } });
+$("#perspReset").onclick = () => { const d = defaultPersp(); Object.assign(state.grid, { quad: d.quad, cols: d.cols, rows: d.rows }); mode = "persp"; changed(); };
 $("#shapeBtn").onclick = () => setMode("shape");
 $("#closeShape").onclick = () => { if (!mv.closeShape()) toast("Place at least 3 corners first."); };
 $("#undoPoint").onclick = () => mv.undoPoint();
@@ -196,6 +221,7 @@ $("#clearShapes").onclick = () => {
 const HINTS = {
   fog: "Drag on the map to paint. Turn off Paint fog to move tokens or pan.",
   align: "Drag the map to slide the grid under it, or use the arrows to fine-tune.",
+  persp: "Drag the four blue corners onto the floor of the map. Squares shrink toward the far side. Set how many squares fit across and deep so they look square.",
   shape: "Click to place corners, then Close shape. Drag a corner to adjust it, double-click to delete it. The grid only shows inside shapes.",
 };
 function setMode(m) { mode = mode === m ? "none" : m; syncPaint(); }
@@ -206,20 +232,24 @@ function updateShapeButtons() {
 }
 function syncPaint() {
   if (!state.fog.on && mode === "fog") mode = "none";
-  if (!state.grid.on && (mode === "align" || mode === "shape")) mode = "none";
+  if (!state.grid.on && (mode === "align" || mode === "shape" || mode === "persp")) mode = "none";
+  if (mode === "persp" && state.grid.mode !== "perspective") mode = "none";
+  if (mode === "align" && state.grid.mode === "perspective") mode = "none";
   mv.paintMode = mode === "fog" ? paintTool : null;
   mv.moveGrid = mode === "align";
   mv.shapeMode = mode === "shape";
+  mv.perspMode = mode === "persp";
   mv.brush = Number($("#brush").value) / 100;
   mv.renderShapes();
   mv.root.classList.toggle("paint", mode === "fog");
-  mv.root.classList.toggle("aim", mode === "align" || mode === "shape");
+  mv.root.classList.toggle("aim", mode === "align" || mode === "shape" || mode === "persp");
+  $("#perspBtn").setAttribute("aria-pressed", mode === "persp");
   $("#paintBtn").setAttribute("aria-pressed", mode === "fog");
   $("#alignBtn").setAttribute("aria-pressed", mode === "align");
   $("#shapeBtn").setAttribute("aria-pressed", mode === "shape");
   $("#shapeCtl").hidden = mode !== "shape";
   const hint = $("#gridHint");
-  hint.hidden = mode !== "align" && mode !== "shape";
+  hint.hidden = mode !== "align" && mode !== "shape" && mode !== "persp";
   hint.textContent = HINTS[mode] || "";
   $("#paintHint").hidden = mode !== "fog";
   $("#fogReveal").setAttribute("aria-pressed", paintTool === "reveal");
@@ -269,10 +299,9 @@ $("#hideAll").onclick = () => {
 };
 $("#revealPcs").onclick = () => {
   if (!state.mapW) return;
-  const r = (state.grid.size * 3) / state.mapW;
   const pcs = state.ents.filter((e) => e.type === "pc");
   if (!pcs.length) { toast("Add a player token first."); return; }
-  pcs.forEach((e) => mv.paint(e.x, e.y, e.x, e.y, r, true));
+  pcs.forEach((e) => mv.paint(e.x, e.y, e.x, e.y, (mv.cellSizeAt(e.x, e.y) * 3) / state.mapW, true));
   scheduleFogUpload();
 };
 
@@ -324,7 +353,7 @@ $("#addForm").addEventListener("submit", (e) => {
 
 function addTokens(name, type, count) {
   const c = mv.centerPoint() || { x: 0.5, y: 0.5 };
-  const w = state.mapW || 1, h = state.mapH || 1, g = state.grid.size;
+  const w = state.mapW || 1, h = state.mapH || 1, g = mv.cellSizeAt(c.x, c.y);
   for (let i = 0; i < count; i++) {
     const ox = count > 1 ? (i % 4) - 1.5 : 0;
     const e = {
@@ -1169,7 +1198,15 @@ $("#copyLink").onclick = async () => {
   try { await navigator.clipboard.writeText(link); toast("Player link copied."); }
   catch { prompt("Copy this link for your players:", link); }
 };
-$("#leave").onclick = () => {
+$("#leave").textContent = viaAccount ? "All campaigns" : "Leave";
+$("#leave").onclick = async () => {
+  if (viaAccount) {
+    clearTimeout(timer); timer = null;
+    try { await flush(); } catch { /* the leave-page warning covers anything unsaved */ }
+    localStorage.removeItem("dmTable");
+    location.href = "dm-home.html";
+    return;
+  }
   if (!confirm("Leave this table? You can resume it later with the table code and PIN.")) return;
   localStorage.removeItem("dmTable");
   location.href = "/";
@@ -1224,7 +1261,7 @@ $("#leave").onclick = () => {
   } catch (err) {
     if (err.status === 401 || err.status === 404) {
       localStorage.removeItem("dmTable");
-      location.replace("/");
+      location.replace(viaAccount ? "dm-home.html" : "/");
     } else {
       document.body.innerHTML = `<p style="padding:2rem">Could not load the table: ${esc(err.message)}. Refresh to try again.</p>`;
     }

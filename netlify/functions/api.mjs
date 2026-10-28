@@ -35,7 +35,16 @@
 //   DELETE /api/logins/CODE/PID   DM removes it
 //   GET    /api/library/CODE      the table's spell library
 //   PUT    /api/library/CODE      DM replaces the spell library  { spells }
-// Player requests for a locked character carry the header x-player (the login token).
+//   POST   /api/account/register  create a DM account       { name, password } -> { token }
+//   POST   /api/account/login     sign in                    { name, password } -> { token }
+//   GET    /api/account/me        the account's campaigns    header x-acct
+//   POST   /api/account/campaigns        new campaign        { name } -> { code }
+//   PUT    /api/account/campaigns/CODE   rename              { name }
+//   DELETE /api/account/campaigns/CODE   leave/delete it
+//   POST   /api/account/claim     add an older table to the account  { code, pin }
+//   POST   /api/account/password  change the password       { old, next } -> { token }
+// A DM proves who they are with either the table PIN or "acct:<token>" in the x-pin header; the token only
+// works for tables the account owns. Player requests for a locked character carry the header x-player.
 import { getStore } from "@netlify/blobs";
 
 const reply = (data, status = 200) =>
@@ -237,6 +246,34 @@ function sharedCamp(d) {
   return { rev: d.rev, campaign: { name: d.campaign.name, fields }, sessions };
 }
 
+/* DM accounts: a name and password (stored as a salted PBKDF2 hash). Each account owns campaigns (tables).
+   The sign-in token is derived from the password hash, so changing the password signs old devices out. */
+const bytesToHex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+const randomHex = (n) => bytesToHex(crypto.getRandomValues(new Uint8Array(n)));
+async function pbkdf2(password, saltHex) {
+  const salt = Uint8Array.from(saltHex.match(/../g).map((h) => parseInt(h, 16)));
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
+  return bytesToHex(await crypto.subtle.deriveBits({ name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" }, key, 256));
+}
+const acctKey = (id) => `acct/${id}`;
+const nameKey = (n) => `acctname/${n}`;
+const cleanAcctName = (s) => String(s || "").trim().toLowerCase();
+const ACCT_NAME = /^[a-z0-9][a-z0-9_.-]{2,23}$/;
+const acctToken = async (a) => `${a.id}.${await hash(`tok|${a.pwHash}|${a.id}`)}`;
+async function acctFromToken(store, token) {
+  const [id, sig] = String(token || "").split(".");
+  if (!id || !sig) return null;
+  const a = await store.get(acctKey(cleanId(id)), { type: "json" });
+  return a && (await acctToken(a)) === `${id}.${sig}` ? a : null;
+}
+async function purgeRoom(store, room) {
+  const kinds = ["state", "map", "fog", "thumb", "img", "sub", "pcu", "mvreq", "pings", "roll", "sheet", "login", "lib", "camp", "locs", "meta"];
+  for (const k of kinds) {
+    const { blobs } = await store.list({ prefix: `${k}/${room}` });
+    await Promise.all(blobs.map((b) => store.delete(b.key)));
+  }
+}
+
 /* Pings: short-lived markers anyone at the table can drop on the map. */
 const PING_TTL = 8000, MAX_PINGS = 12;
 const livePings = async (store, room) => {
@@ -253,8 +290,14 @@ function cleanGrid(g) {
     .map((poly) => (Array.isArray(poly) ? poly : []).slice(0, 80)
       .map((p) => [flt(p?.[0], 0, 1, 0), flt(p?.[1], 0, 1, 0)]))
     .filter((poly) => poly.length >= 3);
-  return { on: !!g.on, size: flt(g.size, 8, 2000, 60), snap: !!g.snap, opacity: flt(g.opacity, 0.03, 1, 0.3), dark: !!g.dark,
-    ox: flt(g.ox, -5000, 5000, 0), oy: flt(g.oy, -5000, 5000, 0), areas };
+  // Perspective grid: four corners (a little outside the picture is fine) plus how many squares across and deep.
+  const quad = Array.isArray(g.quad) && g.quad.length === 4 && g.quad.every((p) => Array.isArray(p))
+    ? g.quad.map((p) => [flt(p[0], -0.5, 1.5, 0.5), flt(p[1], -0.5, 1.5, 0.5)]) : null;
+  const out = { on: !!g.on, size: flt(g.size, 8, 2000, 60), snap: !!g.snap, opacity: flt(g.opacity, 0.03, 1, 0.3), dark: !!g.dark,
+    ox: flt(g.ox, -5000, 5000, 0), oy: flt(g.oy, -5000, 5000, 0), areas,
+    mode: g.mode === "perspective" && quad ? "perspective" : "flat" };
+  if (quad) { out.quad = quad; out.cols = num(g.cols, 1, 120, 10); out.rows = num(g.rows, 1, 120, 14); }
+  return out;
 }
 function cleanLocs(d) {
   const locations = (Array.isArray(d?.locations) ? d.locations : []).slice(0, 80).map((l) => {
@@ -309,10 +352,121 @@ export default async (req) => {
       return reply({ room: code, state });
     }
 
+    if (route === "account") {
+      const sub = rawRoom;
+      const body = req.method === "POST" || req.method === "PUT" ? await req.json().catch(() => ({})) : {};
+      const WINDOW_MS = 10 * 60 * 1000;
+
+      if (sub === "register" && req.method === "POST") {
+        const lname = cleanAcctName(body.name);
+        if (!ACCT_NAME.test(lname)) return fail(400, "Choose a name of 3 to 24 letters, numbers, dots, dashes or underscores.");
+        if (typeof body.password !== "string" || body.password.length < 8 || body.password.length > 100) return fail(400, "Use a password of at least 8 characters.");
+        if (await store.get(nameKey(lname))) return fail(409, "That name is taken. Try another.");
+        const id = randomHex(8), salt = randomHex(16);
+        const a = { id, name: lname, salt, pwHash: await pbkdf2(body.password, salt), campaigns: [], fails: { n: 0, t: 0 }, created: Date.now() };
+        await store.setJSON(acctKey(id), a);
+        await store.setJSON(nameKey(lname), { id });
+        return reply({ token: await acctToken(a), name: a.name });
+      }
+
+      if (sub === "login" && req.method === "POST") {
+        const lname = cleanAcctName(body.name);
+        const idx = await store.get(nameKey(lname), { type: "json" });
+        const a = idx ? await store.get(acctKey(cleanId(idx.id)), { type: "json" }) : null;
+        if (!a) { await pbkdf2("x", "00".repeat(16)); return fail(401, "Wrong name or password."); }
+        const now = Date.now(), f = a.fails || { n: 0, t: 0 }, recent = now - f.t < WINDOW_MS;
+        if (recent && f.n >= 8) return fail(429, "Too many wrong tries. Wait a few minutes and try again.");
+        if ((await pbkdf2(String(body.password ?? ""), a.salt)) !== a.pwHash) {
+          a.fails = { n: (recent ? f.n : 0) + 1, t: now };
+          await store.setJSON(acctKey(a.id), a);
+          return fail(401, "Wrong name or password.");
+        }
+        if (f.n) { a.fails = { n: 0, t: 0 }; await store.setJSON(acctKey(a.id), a); }
+        return reply({ token: await acctToken(a), name: a.name });
+      }
+
+      // Everything below needs a signed-in account.
+      const a = await acctFromToken(store, req.headers.get("x-acct"));
+      if (!a) return fail(401, "Please sign in again.");
+      const campaigns = () => [...a.campaigns].sort((x, y) => y.added - x.added);
+
+      if (sub === "me" && req.method === "GET") return reply({ name: a.name, campaigns: campaigns() });
+
+      if (sub === "campaigns" && req.method === "POST") {
+        const name = str(body.name, 80).trim() || "New campaign";
+        if (a.campaigns.length >= 50) return fail(400, "That's the most campaigns an account can hold.");
+        let code = "";
+        for (let i = 0; i < 6; i++) { const c = makeCode(); if (!(await store.get(`meta/${c}`))) { code = c; break; } }
+        if (!code) return fail(500, "Could not make a table code. Try again.");
+        // The table keeps a random PIN of its own that nobody needs to know: the account is the way in.
+        await store.setJSON(`meta/${code}`, { pinHash: await hash(randomHex(16)), created: Date.now(), owners: [a.id] });
+        await store.setJSON(`state/${code}`, blankState());
+        await store.setJSON(`camp/${code}`, { ...cleanCamp({ campaign: { name } }), rev: 1 });
+        a.campaigns.push({ code, name, added: Date.now() });
+        await store.setJSON(acctKey(a.id), a);
+        return reply({ code, name });
+      }
+
+      if (sub === "campaigns" && (req.method === "PUT" || req.method === "DELETE")) {
+        const code = (rawId || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+        const entry = a.campaigns.find((c) => c.code === code);
+        const tmeta = await store.get(`meta/${code}`, { type: "json" });
+        if (!entry || !tmeta || !(tmeta.owners || []).includes(a.id)) return fail(404, "You don't have a campaign with that code.");
+        if (req.method === "PUT") {
+          const name = str(body.name, 80).trim();
+          if (!name) return fail(400, "Give the campaign a name.");
+          entry.name = name;
+          await store.setJSON(acctKey(a.id), a);
+          const raw = await store.get(`camp/${code}`, { type: "json" });
+          if (raw) { raw.campaign = { ...(raw.campaign || {}), name }; await store.setJSON(`camp/${code}`, raw); }
+          return reply({ ok: true });
+        }
+        // Delete: take this account off the table. When nobody owns it any more, its data is erased for good.
+        a.campaigns = a.campaigns.filter((c) => c.code !== code);
+        await store.setJSON(acctKey(a.id), a);
+        tmeta.owners = tmeta.owners.filter((id) => id !== a.id);
+        if (tmeta.owners.length) { await store.setJSON(`meta/${code}`, tmeta); return reply({ ok: true, erased: false }); }
+        await purgeRoom(store, code);
+        return reply({ ok: true, erased: true });
+      }
+
+      if (sub === "claim" && req.method === "POST") {
+        const code = String(body.code || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+        const tmeta = await store.get(`meta/${code}`, { type: "json" });
+        if (!tmeta || (await hash(String(body.pin ?? ""))) !== tmeta.pinHash) return fail(401, "That table code and PIN don't match.");
+        tmeta.owners = [...new Set([...(tmeta.owners || []), a.id])];
+        await store.setJSON(`meta/${code}`, tmeta);
+        if (!a.campaigns.some((c) => c.code === code)) {
+          const camp = await store.get(`camp/${code}`, { type: "json" });
+          a.campaigns.push({ code, name: camp?.campaign?.name?.trim() || `Table ${code}`, added: Date.now() });
+          await store.setJSON(acctKey(a.id), a);
+        }
+        return reply({ ok: true, code });
+      }
+
+      if (sub === "password" && req.method === "POST") {
+        if ((await pbkdf2(String(body.old ?? ""), a.salt)) !== a.pwHash) return fail(401, "Your current password isn't right.");
+        if (typeof body.next !== "string" || body.next.length < 8 || body.next.length > 100) return fail(400, "Use a new password of at least 8 characters.");
+        a.salt = randomHex(16);
+        a.pwHash = await pbkdf2(body.next, a.salt);
+        await store.setJSON(acctKey(a.id), a);
+        return reply({ token: await acctToken(a) });
+      }
+      return fail(404, "Not found.");
+    }
+
     if (!room) return fail(400, "Missing table code.");
     const meta = await store.get(`meta/${room}`, { type: "json" });
     if (!meta) return fail(404, "No table with that code.");
-    const isDm = async (pin) => !!pin && (await hash(pin)) === meta.pinHash;
+    // The DM is whoever has the table PIN, or a signed-in DM account that owns this table.
+    const isDm = async (cred) => {
+      if (!cred) return false;
+      if (cred.startsWith("acct:")) {
+        const a = await acctFromToken(store, cred.slice(5));
+        return !!a && (meta.owners || []).includes(a.id);
+      }
+      return (await hash(cred)) === meta.pinHash;
+    };
     const dmOnly = async () => ((await isDm(req.headers.get("x-pin"))) ? null : fail(401, "Wrong PIN."));
     // Is this request allowed to act as the character? Open characters (no PIN set) always are.
     const mayActAs = async (pid) => {

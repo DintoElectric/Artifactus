@@ -26,23 +26,45 @@
 
   <section class="forms">
     <div class="card" id="dmCard">
-      <h2>I'm the DM</h2>
-      <div class="seg" role="group" aria-label="DM options">
-        <button type="button" id="modeNew" aria-pressed="true">New table</button>
-        <button type="button" id="modeResume" aria-pressed="false">Resume a table</button>
+      <h2>I'm a DM</h2>
+
+      <div id="signedIn" hidden>
+        <p style="margin:0 0 .8rem">Signed in as <b id="who"></b>.</p>
+        <div class="row">
+          <a class="btn primary" href="dm-home.html">Open my campaigns</a>
+          <button class="btn ghost" id="signOut" type="button">Sign out</button>
+        </div>
       </div>
-      <form id="dmForm">
-        <div class="field" id="codeField" hidden>
-          <label for="dmCode">Table code</label>
-          <input id="dmCode" type="text" autocapitalize="characters" autocomplete="off" maxlength="8">
+
+      <div id="authBox">
+        <div class="seg" role="group" aria-label="Account">
+          <button type="button" id="modeIn" aria-pressed="true">Log in</button>
+          <button type="button" id="modeUp" aria-pressed="false">Create account</button>
         </div>
-        <div class="field">
-          <label for="dmPin" id="pinLabel">Choose a DM PIN (4+ characters)</label>
-          <input id="dmPin" type="password" autocomplete="off">
-        </div>
-        <button class="btn primary" id="dmGo" type="submit">Create table</button>
-        <p class="err" id="dmErr" role="alert"></p>
-      </form>
+        <form id="authForm">
+          <div class="field"><label for="acctName">Name</label>
+            <input id="acctName" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="24"></div>
+          <div class="field"><label for="acctPw">Password</label>
+            <input id="acctPw" type="password" autocomplete="current-password" maxlength="100"></div>
+          <div class="field" id="pw2Field" hidden><label for="acctPw2">Confirm password</label>
+            <input id="acctPw2" type="password" autocomplete="new-password" maxlength="100"></div>
+          <button class="btn primary" id="authGo" type="submit">Log in</button>
+          <p class="err" id="authErr" role="alert"></p>
+        </form>
+      </div>
+
+      <details class="olds">
+        <summary>Have an older table code and PIN?</summary>
+        <form id="dmForm">
+          <div class="field"><label for="dmCode">Table code</label>
+            <input id="dmCode" type="text" autocapitalize="characters" autocomplete="off" maxlength="8"></div>
+          <div class="field"><label for="dmPin">DM PIN</label>
+            <input id="dmPin" type="password" autocomplete="off"></div>
+          <button class="btn" type="submit">Open table</button>
+          <p class="err" id="dmErr" role="alert"></p>
+          <p class="hint">After you open it, you can add it to your account from your campaigns page.</p>
+        </form>
+      </details>
     </div>
 
     <div class="card">
@@ -62,35 +84,59 @@
 <script type="module">
 import { call } from "./common.js";
 const $ = (s) => document.querySelector(s);
-let mode = "new";
+let mode = "in";
+
+/* ----- DM accounts ----- */
+const acct = JSON.parse(localStorage.getItem("dmAccount") || "null");
+if (acct) {
+  $("#who").textContent = acct.name;
+  $("#signedIn").hidden = false;
+  $("#authBox").hidden = true;
+}
+$("#signOut").onclick = () => {
+  localStorage.removeItem("dmAccount");
+  localStorage.removeItem("dmTable");
+  location.reload();
+};
 
 const setMode = (m) => {
   mode = m;
-  $("#modeNew").setAttribute("aria-pressed", m === "new");
-  $("#modeResume").setAttribute("aria-pressed", m === "resume");
-  $("#codeField").hidden = m === "new";
-  $("#pinLabel").textContent = m === "new" ? "Choose a DM PIN (4+ characters)" : "DM PIN";
-  $("#dmGo").textContent = m === "new" ? "Create table" : "Resume table";
-  $("#dmErr").textContent = "";
+  $("#modeIn").setAttribute("aria-pressed", m === "in");
+  $("#modeUp").setAttribute("aria-pressed", m === "up");
+  $("#pw2Field").hidden = m === "in";
+  $("#authGo").textContent = m === "in" ? "Log in" : "Create account";
+  $("#acctPw").autocomplete = m === "in" ? "current-password" : "new-password";
+  $("#authErr").textContent = "";
 };
-$("#modeNew").onclick = () => setMode("new");
-$("#modeResume").onclick = () => setMode("resume");
+$("#modeIn").onclick = () => setMode("in");
+$("#modeUp").onclick = () => setMode("up");
 
+$("#authForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("#authErr").textContent = "";
+  const name = $("#acctName").value.trim(), password = $("#acctPw").value;
+  if (mode === "up" && password !== $("#acctPw2").value) { $("#authErr").textContent = "The two passwords don't match."; return; }
+  try {
+    const r = await call(mode === "in" ? "account/login" : "account/register", { method: "POST", body: { name, password } });
+    localStorage.setItem("dmAccount", JSON.stringify({ name: r.name, token: r.token }));
+    localStorage.removeItem("dmTable");
+    location.href = "dm-home.html";
+  } catch (err) {
+    $("#authErr").textContent = err.message;
+  }
+});
+
+/* ----- an older table with a code and PIN ----- */
 const last = JSON.parse(localStorage.getItem("dmTable") || "null");
-if (last) { setMode("resume"); $("#dmCode").value = last.room; }
+if (last && last.via !== "account") { $("#dmCode").value = last.room; $(".olds").open = true; }
 
 $("#dmForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   $("#dmErr").textContent = "";
   const pin = $("#dmPin").value;
+  const room = $("#dmCode").value.trim().toUpperCase();
   try {
-    let room;
-    if (mode === "new") {
-      room = (await call("table", { method: "POST", body: { pin } })).room;
-    } else {
-      room = $("#dmCode").value.trim().toUpperCase();
-      await call(`login/${room}`, { method: "POST", body: { pin } });
-    }
+    await call(`login/${room}`, { method: "POST", body: { pin } });
     localStorage.setItem("dmTable", JSON.stringify({ room, pin }));
     location.href = "dm.html";
   } catch (err) {
@@ -98,6 +144,7 @@ $("#dmForm").addEventListener("submit", async (e) => {
   }
 });
 
+/* ----- players ----- */
 $("#joinForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   $("#joinErr").textContent = "";
