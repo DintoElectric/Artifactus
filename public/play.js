@@ -152,6 +152,7 @@ const mv = new MapView($("#map"), {
   interactive: false,
   emptyText: EMPTY_MAP,
   onTap: (x, y, mode) => onMapTap(x, y, mode),
+  onRoute: (info) => onRoute(info),
   imgUrl: (e) => (e.img ? `/api/img/${room}/${e.id}?v=${e.img}` : null),
 });
 
@@ -171,7 +172,10 @@ window.addEventListener("resize", setDockHeight);
 let pings = [];              // { id, x, y, label, color, expires }
 let mapMode = null;          // "ping" | "move" | null: what the next tap on the map does
 let moveSel = null;          // a spot picked but not yet sent
-let pendingMove = null;      // a request the DM hasn't answered yet: { t, x, y, sent }
+let pendingMove = null;      // a request the DM hasn't answered yet: { t, x, y, path?, sent }
+let allowance = null;        // how far this character can move right now, from the server: { normal, dash }
+let routeLast = null;        // the route being traced, as the map last reported it
+let dashing = false, lastHint = "";
 let lastPing = 0, mapMsgTimer = null;
 
 function mapMsg(text, ms = 4500) {
@@ -195,7 +199,7 @@ function refreshOverlays() {
   const mine = st?.ents.find((e) => e.id === me);
   const color = pingColor(me || "x");
   const moves = [];
-  if (pendingMove) moves.push({ x: pendingMove.x, y: pendingMove.y, fromX: mine?.x, fromY: mine?.y, color, label: "Waiting for your DM…" });
+  if (pendingMove) moves.push({ x: pendingMove.x, y: pendingMove.y, fromX: mine?.x, fromY: mine?.y, color, label: "Waiting for your DM…", path: pendingMove.path || null });
   else if (moveSel) moves.push({ x: moveSel.x, y: moveSel.y, fromX: mine?.x, fromY: mine?.y, color, label: "Move here?" });
   mv.setOverlays({ pings: pings.map(({ expires, ...p }) => p), moves });
 }
@@ -209,9 +213,63 @@ function addPing(p, life) {
 
 function setMapMode(mode) {
   mapMode = mapMode === mode ? null : mode;
-  if (mapMode !== "move") moveSel = null;
-  mv.setTapMode(mapMode);
+  if (mapMode !== "move") { moveSel = null; stopRoute(); }
+  mv.setTapMode(mapMode === "ping" ? "ping" : null);   // a move is traced along the grid, not tapped
   updateMapUI();
+}
+
+/* ----- tracing a move along the grid ----- */
+const WHY = { edge: "That's past the edge of the grid.", off: "That's off the map.", shape: "You can't go there. It's outside the open area.", fog: "That square is hidden by fog.", enemy: "An enemy is in the way.", max: "That's all the movement you have." };
+const sameCell = (e, cell) => { const q = mv.cellOf(e.x, e.y); return !!q && q.c === cell.c && q.r === cell.r; };
+// A square you can walk into: on the map, in the open area, not under fog, and without an enemy standing in it.
+const canEnter = (c, r) => mv.cellProblem(c, r) || (st.ents.some((e) => e.type === "enemy" && !e.down && sameCell(e, { c, r })) ? "enemy" : null);
+
+function stopRoute() {
+  mv.clearRoute();
+  routeLast = null; allowance = null; dashing = false; lastHint = "";
+}
+
+/* Start tracing from the character's own square. Resolves to true (tracing), false (no grid here, so tap a spot instead)
+   or null (couldn't start). */
+async function startRoute() {
+  const mine = st.ents.find((e) => e.id === me);
+  const here = mine && mv.cellOf(mine.x, mine.y);
+  if (!here) return false;
+  try {
+    allowance = await call(`moveinfo/${room}/${me}`, { ...auth() });
+  } catch (err) {
+    if (err.status === 401) { logout("Your login changed, so please sign in again."); return null; }
+    mapMsg(err.message || "Couldn't check your movement. Try again.");
+    return null;
+  }
+  const a = allowance.normal;
+  mv.setRoute({ start: here, max: a.limited ? a.maxSteps : 150, canEnter, color: pingColor(me) });
+  return true;
+}
+
+function onRoute(info) {
+  routeLast = info;
+  if (info && info.steps > 0 && /^Press /.test($("#mapMsg").textContent)) mapMsg("");   // they've got the idea
+  if (info && info.hint !== lastHint) {
+    lastHint = info.hint;
+    if (info.hint) mapMsg(WHY[info.hint] || "", 2500);
+  }
+  updateMoveBar();
+}
+
+function updateMoveBar() {
+  const tracing = !!mv.route;
+  $("#moveBar").hidden = !(tracing || moveSel);
+  for (const id of ["moveUndo", "moveClear", "moveDash"]) $("#" + id).hidden = !tracing;
+  if (!tracing) { $("#moveInfo").textContent = "Move here?"; $("#moveInfo").classList.remove("warn"); $("#moveSend").disabled = false; return; }
+  const a = allowance?.[dashing ? "dash" : "normal"];
+  const feet = routeLast?.feet ?? 0;
+  $("#moveInfo").textContent = a?.limited ? `${feet} of ${a.left} ft` : `${feet} ft`;
+  $("#moveInfo").classList.toggle("warn", !!a?.limited && feet >= a.left && a.left > 0);
+  $("#moveSend").disabled = !(routeLast && routeLast.steps >= 1);
+  $("#moveUndo").disabled = $("#moveClear").disabled = !(routeLast && routeLast.steps >= 1);
+  $("#moveDash").hidden = !(a?.limited && allowance.normal.speed > 0);
+  $("#moveDash").setAttribute("aria-pressed", dashing);
 }
 
 function onMapTap(x, y, mode) {
@@ -237,9 +295,13 @@ function onMapTap(x, y, mode) {
 function updateMapUI() {
   const showMap = !!(st && st.mapOn && st.mapRev);
   $("#mapFloat").hidden = !showMap;
-  if (!showMap) { mapMode = null; moveSel = null; mv.setTapMode(null); return; }
+  if (!showMap) { mapMode = null; moveSel = null; stopRoute(); mv.setTapMode(null); return; }
   const ms = moveState();
-  if (mapMode === "move" && !ms.ok) { mapMode = null; moveSel = null; mv.setTapMode(null); }
+  if (mapMode === "move" && !ms.ok) { mapMode = null; moveSel = null; stopRoute(); mv.setTapMode(null); }
+  if (mv.route) {   // if the DM moved the token, the route no longer starts where it should
+    const mine = st.ents.find((e) => e.id === me), here = mine && mv.cellOf(mine.x, mine.y), r0 = mv.route.cells[0];
+    if (!here || here.c !== r0.c || here.r !== r0.r) { mapMode = null; stopRoute(); mv.setTapMode(null); mapMsg("Your token moved, so start your move again."); }
+  }
   $("#pingBtn").setAttribute("aria-pressed", mapMode === "ping");
   const mb = $("#moveBtn");
   mb.hidden = !me;
@@ -247,11 +309,12 @@ function updateMapUI() {
   mb.setAttribute("aria-pressed", mapMode === "move");
   mb.textContent = pendingMove ? "Cancel move" : "Move";
   $("#moveReason").textContent = me && !ms.ok && !pendingMove ? ms.why : "";
-  $("#moveBar").hidden = !moveSel;
+  updateMoveBar();
   if (!$("#mapMsg").textContent) {
     if (mapMode === "ping") mapMsg("Tap the map to ping a spot.", 0);
-    else if (mapMode === "move" && !moveSel) mapMsg("Tap where you want to go.", 0);
-  } else if (!mapMode && /^Tap /.test($("#mapMsg").textContent)) mapMsg("");
+    else if (mapMode === "move" && mv.route && !(routeLast && routeLast.steps)) mapMsg("Press your token and drag along the grid to trace your path. Tapping a square works too.", 0);
+    else if (mapMode === "move" && !moveSel && !mv.route) mapMsg("Tap where you want to go.", 0);
+  } else if ((!mapMode && /^(Tap |Press )/.test($("#mapMsg").textContent)) || (mv.route && routeLast?.steps && /^Press /.test($("#mapMsg").textContent))) mapMsg("");
   refreshOverlays();
 }
 
@@ -265,10 +328,46 @@ $("#moveBtn").onclick = async () => {
     return;
   }
   mapMsg("");
-  setMapMode("move");
+  if (mapMode === "move") { setMapMode(null); return; }
+  mapMode = "move";
+  mv.setTapMode(null);
+  const traced = await startRoute();
+  if (traced === null) { mapMode = null; updateMapUI(); return; }
+  if (traced === false) mv.setTapMode("move");   // no grid to trace on: tap a spot, as before
+  updateMapUI();
+};
+$("#moveUndo").onclick = () => mv.routeUndo();
+$("#moveClear").onclick = () => mv.routeReset();
+$("#moveDash").onclick = () => {
+  if (!allowance) return;
+  dashing = !dashing;
+  const a = allowance[dashing ? "dash" : "normal"];
+  mv.routeSetMax(a.limited ? a.maxSteps : 150);
+  updateMoveBar();
 };
 $("#moveCancel").onclick = () => { moveSel = null; setMapMode(null); mapMsg(""); };
 $("#moveSend").onclick = async () => {
+  if (mv.route) {   // a traced route
+    const info = mv.routeInfo();
+    if (!info || info.steps < 1) return;
+    const end = info.cells[info.cells.length - 1];
+    const other = st.ents.find((e) => e.id !== me && e.type !== "object" && sameCell(e, end));
+    if (other) { mapMsg(`${other.name} is standing there. Pick an empty square to stop on.`); return; }
+    const path = info.points.map((p) => [p.x, p.y]);
+    try {
+      const r = await call(`move/${room}`, { method: "POST", body: { id: me, path, dash: dashing || undefined }, ...auth() });
+      pendingMove = { t: r.t, x: path[path.length - 1][0], y: path[path.length - 1][1], path, sent: Date.now() };
+      mapMode = null;
+      stopRoute();
+      mv.setTapMode(null);
+      mapMsg("Sent. Waiting for your DM to approve.", 6000);
+    } catch (err) {
+      if (err.status === 401) { logout("Your login changed, so please sign in again."); return; }
+      mapMsg(err.message);
+    }
+    updateMapUI();
+    return;
+  }
   if (!moveSel) return;
   const spot = moveSel;
   try {

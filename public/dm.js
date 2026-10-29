@@ -1,4 +1,4 @@
-import { call, uid, esc, clamp, TYPES, OBJECT_ICONS, OBJECT_SHAPES, OBJECT_TINTS, OBJECT_PRESETS, STRUCT_SHAPES, MapView, pingColor, PING_TTL, defaultPersp } from "./common.js";
+import { call, uid, esc, clamp, TYPES, OBJECT_ICONS, OBJECT_SHAPES, OBJECT_TINTS, OBJECT_PRESETS, STRUCT_SHAPES, MapView, pingColor, PING_TTL, defaultPersp, FT_PER_SQUARE, turnKey } from "./common.js";
 import { mountRoller } from "./dice.js";
 import { SheetStore, mountBook, mountNotes, blankSheet } from "./sheet.js";
 import { Library, parseSpells } from "./library.js";
@@ -505,6 +505,8 @@ function editToken(id) {
         <div class="field"><label for="f_hp">HP</label><input id="f_hp" name="hp" type="number" value="${e.hp ?? ""}"></div>
         <div class="field"><label for="f_mhp">Max HP</label><input id="f_mhp" name="maxHp" type="number" value="${e.maxHp ?? ""}"></div>
       </div>
+      <div class="field" data-grp="people"><label for="f_speed">Speed (feet)</label><input id="f_speed" name="speed" type="number" min="0" max="300" step="5" value="${e.speed ?? ""}" placeholder="From their sheet, or 30"></div>
+      ${e.moved ? `<label class="check field" data-grp="people"><input type="checkbox" name="resetMove"> Give back the ${e.moved} feet moved this turn</label>` : ""}
       <div class="field"><label for="f_img">Token image</label><input id="f_img" name="image" type="file" accept="image/*"></div>
       ${e.img ? '<label class="check field"><input type="checkbox" name="rmimg"> Remove current image</label>' : ""}
       <label class="check field"><input type="checkbox" name="hidden" ${e.hidden ? "checked" : ""}> Hidden from players</label>
@@ -532,6 +534,8 @@ function editToken(id) {
       }
       e.hp = d.hp === "" ? null : Number(d.hp);
       e.maxHp = d.maxHp === "" ? null : Number(d.maxHp);
+      if (d.speed === "" || d.speed === undefined) delete e.speed; else e.speed = clamp(Number(d.speed) || 0, 0, 300);
+      if (d.resetMove === "on") { e.moved = 0; e.dashed = false; }
       e.hidden = d.hidden === "on";
       e.down = d.down === "on";
       if (e.type === "pc" && !state.inv[e.id]) state.inv[e.id] = [];
@@ -1244,7 +1248,8 @@ function refreshOverlays() {
     pings: dmPings.map(({ expires, ...p }) => p),
     moves: pendingMoves.map((m) => {
       const e = ent(m.id);
-      return { x: m.x, y: m.y, fromX: e?.x, fromY: e?.y, color: pingColor(m.id), label: e?.name || "?" };
+      const hasPath = Array.isArray(m.path) && m.path.length > 1;
+      return { x: m.x, y: m.y, fromX: e?.x, fromY: e?.y, color: pingColor(m.id), label: `${e?.name || "?"}${hasPath ? ` · ${m.cost ?? (m.path.length - 1) * FT_PER_SQUARE} ft` : ""}`, path: hasPath ? m.path : null };
     }),
   });
 }
@@ -1260,13 +1265,74 @@ async function pollPings() {
   } catch { /* try again on the next tick */ }
 }
 
+/* The squares a token covers. People cover one square. An object covers its footprint, turned by its rotation
+   (on a perspective grid it's treated as unturned). */
+function tokenCells(t) {
+  const uv = mv.cellUV(t.x, t.y);
+  if (!uv) return [];
+  const c0 = { c: Math.floor(uv[0]), r: Math.floor(uv[1]) };
+  const hw = (t.w || 1) / 2, hh = (t.h || 1) / 2;
+  if (t.type !== "object" || (hw <= 0.5 && hh <= 0.5)) return [c0];
+  const th = mv.persp() ? 0 : ((t.rot || 0) * Math.PI) / 180, cs = Math.cos(th), sn = Math.sin(th);
+  const reach = Math.ceil(Math.max(hw, hh) * 1.5) + 1, out = [];
+  for (let dc = -reach; dc <= reach; dc++) {
+    for (let dr = -reach; dr <= reach; dr++) {
+      const du = c0.c + dc + 0.5 - uv[0], dv = c0.r + dr + 0.5 - uv[1];
+      const u = du * cs + dv * sn, v = -du * sn + dv * cs;
+      if (Math.abs(u) <= hw + 0.01 && Math.abs(v) <= hh + 0.01) out.push({ c: c0.c + dc, r: c0.r + dr });
+    }
+  }
+  return out.length ? out : [c0];
+}
+
+const WHY = { edge: "past the edge of the grid", off: "off the map", shape: "outside the open area", fog: "under fog" };
+
+/* Is this request clean? Returns { problems: [...], crosses: [...] }: problems are things that look wrong (fog, a skipped
+   square, the token having moved), crosses are things the route goes through that you may want to rule on (hidden
+   tokens such as traps, enemies, objects). Approving is always your call. */
+function checkMove(m) {
+  const out = { problems: [], crosses: [] };
+  if (!Array.isArray(m.path) || m.path.length < 2) {   // a single spot (a map with no grid)
+    if (!(mv.isRevealed(m.x, m.y) && mv.inShape(m.x, m.y))) out.problems.push("under fog or outside the area");
+    return out;
+  }
+  const cells = m.path.map(([x, y]) => mv.cellOf(x, y));
+  if (cells.some((c) => !c)) { out.problems.push("the grid has changed since this was drawn"); return out; }
+  for (let i = 1; i < cells.length; i++) {
+    const dc = Math.abs(cells[i].c - cells[i - 1].c), dr = Math.abs(cells[i].r - cells[i - 1].r);
+    if (dc > 1 || dr > 1 || (dc === 0 && dr === 0)) { out.problems.push("the route skips squares"); break; }
+  }
+  const e = ent(m.id), here = e && mv.cellOf(e.x, e.y);
+  if (here && (here.c !== cells[0].c || here.r !== cells[0].r)) out.problems.push("the token has moved since this was drawn");
+  for (const c of cells.slice(1)) {
+    const why = mv.cellProblem(c.c, c.r);
+    if (why) { out.problems.push(WHY[why] || why); break; }
+  }
+  const on = new Set(cells.slice(1).map((c) => `${c.c},${c.r}`)), end = `${cells[cells.length - 1].c},${cells[cells.length - 1].r}`;
+  for (const t of state.ents) {
+    if (t.id === m.id) continue;
+    const cov = tokenCells(t);
+    if (!cov.length) continue;
+    if (t.type !== "object" && cov.some((c) => `${c.c},${c.r}` === end)) out.problems.push(`ends on ${t.name}'s square`);   // nobody can stop on someone else
+    if (t.type === "pc" && !t.hidden) continue;   // walking past a friend in plain view is fine
+    const hits = cov.some((c) => on.has(`${c.c},${c.r}`));
+    if (t.type === "object" ? hits : (t.hidden || t.type === "enemy") && hits) out.crosses.push(`${t.name}${t.hidden ? " (hidden)" : ""}`);
+  }
+  out.crosses = [...new Set(out.crosses)];
+  out.problems = [...new Set(out.problems)];
+  return out;
+}
+
 function renderMoves() {
   $("#moveList").innerHTML = pendingMoves.length ? pendingMoves.map((m) => {
     const e = ent(m.id);
-    const ok = mv.isRevealed(m.x, m.y) && mv.inShape(m.x, m.y);
+    const hasPath = Array.isArray(m.path) && m.path.length > 1;
+    const c = checkMove(m);
     return `<li class="mrow" data-id="${m.id}">
       <span class="dot" style="--c:${pingColor(m.id)}"></span>
-      <span class="mname">${esc(e?.name || "A player")}${ok ? "" : " <small>(under fog or outside the area)</small>"}</span>
+      <span class="mname">${esc(e?.name || "A player")}${hasPath ? ` <small>${m.cost ?? (m.path.length - 1) * FT_PER_SQUARE} ft${m.dash ? " · dash" : ""}${m.speed != null ? ` of ${m.speed * (m.dash ? 2 : 1)}` : ""}</small>` : ""}
+        ${c.problems.length ? `<span class="mwarn">Check: ${esc(c.problems.join("; "))}</span>` : ""}
+        ${c.crosses.length ? `<span class="mnote">Goes through: ${esc(c.crosses.join(", "))}</span>` : ""}</span>
       <button class="btn small ghost" data-act="show">Show</button>
       <button class="btn small primary" data-act="approve">Approve</button>
       <button class="btn small" data-act="deny">Deny</button>
@@ -1277,9 +1343,20 @@ function renderMoves() {
 async function resolveMove(req, ok) {
   handledMoves.add(`${req.id}:${req.t}`);
   const e = ent(req.id);
+  let feet = 0;
   if (ok && e) {
-    const p = mv.snapPoint(req.x, req.y);
-    e.x = p.x; e.y = p.y;
+    const hasPath = Array.isArray(req.path) && req.path.length > 1;
+    const end = hasPath ? { x: req.path[req.path.length - 1][0], y: req.path[req.path.length - 1][1] } : mv.snapPoint(req.x, req.y);
+    e.x = end.x; e.y = end.y;
+    if (hasPath) {
+      feet = req.cost ?? (req.path.length - 1) * FT_PER_SQUARE;
+      if (state.init?.on) {   // in combat, what they've moved this turn is counted
+        const key = turnKey(state.init), same = e.movedKey === key;
+        e.moved = (same ? e.moved || 0 : 0) + feet;
+        e.dashed = (same && !!e.dashed) || !!req.dash;
+        e.movedKey = key;
+      }
+    }
   }
   state.moveResults ||= {};
   state.moveResults[req.id] = { req: req.t, ok, t: Date.now() };
@@ -1288,7 +1365,7 @@ async function resolveMove(req, ok) {
   renderMoves();
   refreshOverlays();
   call(`move/${room}/${req.id}`, { method: "DELETE", pin }).catch(() => {});
-  toast(ok ? `${e?.name || "Player"} moved.` : `Denied ${e?.name || "the"} move.`);
+  toast(ok ? `${e?.name || "Player"} moved${feet ? ` ${feet} ft` : ""}.` : `Denied ${e?.name || "the"} move.`);
 }
 
 $("#moveList").addEventListener("click", (e) => {
@@ -1297,7 +1374,7 @@ $("#moveList").addEventListener("click", (e) => {
   if (!b || !row) return;
   const req = pendingMoves.find((m) => m.id === row.dataset.id);
   if (!req) return;
-  if (b.dataset.act === "show") { mv.focusAt(req.x, req.y); setTab("map"); }
+  if (b.dataset.act === "show") { mv.focusAt(req.x, req.y); if (popCtl) popCtl.focus(); else setTab("map"); }
   else resolveMove(req, b.dataset.act === "approve");
 });
 
@@ -1306,7 +1383,8 @@ function updateMoves(list) {
   pendingMoves = list.filter((m) => !handledMoves.has(`${m.id}:${m.t}`) && ent(m.id));
   if (state.autoApprove) {
     for (const m of [...pendingMoves]) {
-      if (mv.isRevealed(m.x, m.y) && mv.inShape(m.x, m.y)) resolveMove(m, true);   // anything odd waits for you
+      const c = checkMove(m);
+      if (!c.problems.length && !c.crosses.length) resolveMove(m, true);   // anything odd, or going through a trap or an enemy, waits for you
     }
   }
   const key = JSON.stringify(pendingMoves.map((m) => [m.id, m.t]));

@@ -188,6 +188,10 @@ function project(M, u, v) {
 }
 
 /* A pan/zoom map with draggable tokens. Token positions are stored as 0..1 fractions of the image. */
+/* Moving: every grid square is 5 feet. In combat a character can move up to their speed in feet each turn. */
+export const FT_PER_SQUARE = 5;
+export const turnKey = (init) => `${init?.round ?? 0}:${init?.turnId ?? ""}`;
+
 export class MapView {
   constructor(root, opts = {}) {
     this.root = root;
@@ -520,6 +524,159 @@ export class MapView {
     return clamp(Math.hypot(a[0] - b[0], a[1] - b[1]), 10, this.dim.w * 0.25);
   }
 
+  /* Where a spot is on the grid, counted in squares (fractions included): [column, row], or null if there's no grid
+     or the spot is past the horizon of a perspective grid. */
+  cellUV(nx, ny) {
+    if (!this.dim.w || !this.grid.on) return null;
+    const P = this.persp();
+    if (P) return this.gridUV(P, nx, ny);
+    const g = Math.max(8, this.grid.size || 60), ox = this.grid.ox || 0, oy = this.grid.oy || 0;
+    return [(nx * this.dim.w - ox) / g, (ny * this.dim.h - oy) / g];
+  }
+
+  /* The grid square a spot is on: { c: column, r: row }, or null. */
+  cellOf(nx, ny) {
+    const uv = this.cellUV(nx, ny);
+    if (!uv) return null;
+    const c = Math.floor(uv[0]), r = Math.floor(uv[1]);
+    const P = this.persp();
+    if (P && (c < 0 || r < 0 || c >= P.cols || r >= P.rows)) return null;
+    return { c, r };
+  }
+
+  /* The middle of a grid square, as a spot on the map (0 to 1), or null if it can't be placed. */
+  cellCenter(c, r) {
+    if (!this.dim.w) return null;
+    const P = this.persp();
+    if (P) {
+      const pt = this.gridPt(P, c + 0.5, r + 0.5);
+      return pt ? { x: pt[0] / this.dim.w, y: pt[1] / this.dim.h } : null;
+    }
+    const g = Math.max(8, this.grid.size || 60), ox = this.grid.ox || 0, oy = this.grid.oy || 0;
+    return { x: ((c + 0.5) * g + ox) / this.dim.w, y: ((r + 0.5) * g + oy) / this.dim.h };
+  }
+
+  /* Why a character can't stand in this square, or null if they can: "edge" (past a perspective grid), "off" (off the map),
+     "shape" (outside the outlined area) or "fog". */
+  cellProblem(c, r) {
+    const P = this.persp();
+    if (P && (c < 0 || r < 0 || c >= P.cols || r >= P.rows)) return "edge";
+    const p = this.cellCenter(c, r);
+    if (!p || p.x < 0 || p.x > 1 || p.y < 0 || p.y > 1) return "off";
+    if (!this.inShape(p.x, p.y)) return "shape";
+    if (!this.isRevealed(p.x, p.y)) return "fog";
+    return null;
+  }
+
+  /* ----- tracing a route ----- */
+  /* Start tracing a route from a square. cfg: { start: {c, r}, max (most steps), canEnter(c, r) -> null or a reason,
+     color }. The person presses a square on the route and drags (or taps squares) to extend it. */
+  setRoute(cfg) {
+    this.route = { cells: [{ c: cfg.start.c, r: cfg.start.r }], max: Math.max(0, cfg.max ?? 150), canEnter: cfg.canEnter || null, color: cfg.color || "#d4aa5c", hint: "" };
+    this.rdrag = null;
+    this.root.classList.add("routing");
+    this.routeChanged();
+  }
+
+  clearRoute() {
+    if (!this.route) return;
+    this.route = null;
+    this.rdrag = null;
+    this.root.classList.remove("routing");
+    this.renderOverlays(true);
+    this.cb.onRoute?.(null);
+  }
+
+  /* Change how many steps are allowed (for example when Dash is switched on or off). A route that's too long is cut short. */
+  routeSetMax(n) {
+    const R = this.route;
+    if (!R) return;
+    R.max = Math.max(0, n);
+    if (R.cells.length - 1 > R.max) R.cells.length = R.max + 1;
+    R.hint = "";
+    this.routeChanged();
+  }
+
+  routeUndo() {
+    const R = this.route;
+    if (!R || R.cells.length < 2) return;
+    R.cells.pop();
+    R.hint = "";
+    this.routeChanged();
+  }
+
+  routeReset() {
+    const R = this.route;
+    if (!R || R.cells.length < 2) return;
+    R.cells.length = 1;
+    R.hint = "";
+    this.routeChanged();
+  }
+
+  routeInfo() {
+    const R = this.route;
+    if (!R) return null;
+    const points = R.cells.map((q) => this.cellCenter(q.c, q.r));
+    const steps = R.cells.length - 1;
+    return { cells: R.cells.map((q) => ({ ...q })), points, steps, feet: steps * FT_PER_SQUARE, max: R.max, hint: R.hint };
+  }
+
+  routeChanged() {
+    this.renderOverlays(true);
+    this.cb.onRoute?.(this.routeInfo());
+  }
+
+  /* Extend the route toward a square, one step at a time, stopping at the first square that isn't allowed or when the
+     movement runs out. Going back to a square already on the route cuts the route back to it. */
+  routeTo(target) {
+    const R = this.route;
+    if (!R || !target) return;
+    const cells = R.cells;
+    const k = cells.findIndex((q) => q.c === target.c && q.r === target.r);
+    if (k >= 0) {
+      if (k < cells.length - 1) { cells.length = k + 1; R.hint = ""; this.routeChanged(); }
+      return;
+    }
+    let cur = cells[cells.length - 1], hint = "", grew = false;
+    for (let guard = 0; guard < 400 && (cur.c !== target.c || cur.r !== target.r); guard++) {
+      const next = { c: cur.c + Math.sign(target.c - cur.c), r: cur.r + Math.sign(target.r - cur.r) };
+      if (cells.length - 1 >= R.max) { hint = "max"; break; }
+      if (cells.some((q) => q.c === next.c && q.r === next.r)) break;   // the route can't cross itself
+      const why = R.canEnter ? R.canEnter(next.c, next.r) : this.cellProblem(next.c, next.r);
+      if (why) { hint = why; break; }
+      cells.push(next);
+      cur = next;
+      grew = true;
+    }
+    if (grew || hint !== R.hint) { R.hint = hint; this.routeChanged(); }
+  }
+
+  /* Squares along a route as SVG: a line through the middles, a dot and the distance walked on each square. */
+  routeSVG(cells, color, w, h, { dashed = false, label = "", draft = false } = {}) {
+    const pts = cells.map((q) => (Array.isArray(q) ? { x: q[0], y: q[1] } : this.cellCenter(q.c, q.r))).filter(Boolean);
+    if (!pts.length) return "";
+    const g0 = this.cellSizeAt(pts[0].x, pts[0].y);
+    let out = `<g class="route${dashed ? " dashed" : ""}" style="--c:${color}">`;
+    if (draft) out += `<circle class="rstart" cx="${pts[0].x * w}" cy="${pts[0].y * h}" r="${g0 * 0.47}" stroke-width="${g0 * 0.07}"/>`;
+    if (pts.length > 1) {
+      const d = pts.map((p, i) => `${i ? "L" : "M"}${(p.x * w).toFixed(1)} ${(p.y * h).toFixed(1)}`).join(" ");
+      out += `<path class="rhalo" d="${d}" stroke-width="${g0 * 0.2}"/><path class="rline" d="${d}" stroke-width="${g0 * 0.1}"${dashed ? ` stroke-dasharray="${g0 * 0.22} ${g0 * 0.16}"` : ""}/>`;
+    }
+    pts.forEach((p, i) => {
+      if (!i) return;
+      const g = this.cellSizeAt(p.x, p.y), last = i === pts.length - 1;
+      out += `<circle class="rdot" cx="${p.x * w}" cy="${p.y * h}" r="${g * (last ? 0.2 : 0.1)}" stroke-width="${g * 0.03}"/>`;
+      if (!dashed && (last || pts.length <= 13 || i % 5 === 0)) {
+        out += `<text x="${p.x * w}" y="${p.y * h - g * (last ? 0.3 : 0.2)}" font-size="${g * (last ? 0.36 : 0.28)}" stroke-width="${g * 0.07}">${i * FT_PER_SQUARE}${last ? " ft" : ""}</text>`;
+      }
+    });
+    if (label) {
+      const e = pts[pts.length - 1], g = this.cellSizeAt(e.x, e.y);
+      out += `<text x="${e.x * w}" y="${e.y * h + g * 0.75}" font-size="${g * 0.3}" stroke-width="${g * 0.07}">${esc(label)}</text>`;
+    }
+    return out + "</g>";
+  }
+
   /* Snap a spot to the middle of its grid square when snapping is on. */
   snapPoint(nx, ny) {
     if (!(this.grid.snap && this.grid.on) || !this.dim.w) return { x: nx, y: ny };
@@ -589,7 +746,7 @@ export class MapView {
     const { w, h } = this.dim;
     const svg = this.overEl;
     if (!w) { svg.innerHTML = ""; this.overKey = ""; return; }
-    const key = JSON.stringify([this.overlay, this.grid.size, this.grid.mode, this.grid.quad, this.grid.cols, this.grid.rows]);
+    const key = JSON.stringify([this.overlay, this.grid.size, this.grid.mode, this.grid.quad, this.grid.cols, this.grid.rows, this.grid.ox, this.grid.oy, this.route && [this.route.cells, this.route.color]]);
     if (!force && key === this.overKey) return;
     this.overKey = key;
     svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
@@ -597,6 +754,10 @@ export class MapView {
     svg.style.height = h + "px";
     let out = "";
     for (const m of this.overlay.moves) {
+      if (m.path && m.path.length > 1) {   // a traced route waiting for the DM
+        out += this.routeSVG(m.path, m.color, w, h, { dashed: true, label: m.label });
+        continue;
+      }
       const x = m.x * w, y = m.y * h;
       const g = this.cellSizeAt(m.x, m.y), fs = g * 0.3;
       out += `<g class="ghost" style="--c:${m.color}">`;
@@ -611,6 +772,7 @@ export class MapView {
         `<circle class="r r2" cx="${x}" cy="${y}" r="${g * 0.4}" stroke-width="${g * 0.09}"/><circle class="dot" cx="${x}" cy="${y}" r="${g * 0.1}"/>` +
         `<text x="${x}" y="${y - g * 0.55}" font-size="${fs}" text-anchor="middle">${esc(p.label || "")}</text></g>`;
     }
+    if (this.route) out += this.routeSVG(this.route.cells, this.route.color, w, h, { draft: true });
     svg.innerHTML = out;
   }
 
@@ -832,6 +994,18 @@ export class MapView {
       this.root.setPointerCapture(e.pointerId);
       return;
     }
+    if (this.route && !this.rdrag && !this.drag && this.pointers.size === 0) {
+      const n = this.toNorm(e.clientX, e.clientY, false, true), cell = this.cellOf(n.x, n.y);
+      const k = cell ? this.route.cells.findIndex((q) => q.c === cell.c && q.r === cell.r) : -1;
+      if (k >= 0) {   // grabbed the route: carry on from there
+        this.route.cells.length = k + 1;
+        this.route.hint = "";
+        this.rdrag = { pid: e.pointerId };
+        this.root.setPointerCapture(e.pointerId);
+        this.routeChanged();
+        return;
+      }
+    }
     if (this.paintMode && this.interactive && this.pointers.size === 0 && !this.drag && !this.stroke) {
       const p = this.toNorm(e.clientX, e.clientY, false);
       this.stroke = { pid: e.pointerId, x: p.x, y: p.y };
@@ -877,6 +1051,12 @@ export class MapView {
       const p = this.toNorm(e.clientX, e.clientY, false);
       this.paint(st.x, st.y, p.x, p.y, this.brush, this.paintMode === "reveal");
       st.x = p.x; st.y = p.y;
+      return;
+    }
+    const rd = this.rdrag;
+    if (rd && e.pointerId === rd.pid) {
+      const n = this.toNorm(e.clientX, e.clientY, false, true);
+      this.routeTo(this.cellOf(n.x, n.y));
       return;
     }
     const d = this.drag;
@@ -926,6 +1106,7 @@ export class MapView {
       this.cb.onFogStroke?.();
       return;
     }
+    if (this.rdrag && e.pointerId === this.rdrag.pid) { this.rdrag = null; return; }
     const d = this.drag;
     if (d && e.pointerId === d.pid) {
       this.drag = null;
@@ -937,6 +1118,10 @@ export class MapView {
     if (this.tapMode && tap && this.pointers.size === 1 && !this.multi && Math.hypot(e.clientX - tap.sx, e.clientY - tap.sy) < 6) {
       const n = this.toNorm(e.clientX, e.clientY, false);
       this.cb.onTap?.(n.x, n.y, this.tapMode);
+    }
+    if (this.route && tap && this.pointers.size === 1 && !this.multi && Math.hypot(e.clientX - tap.sx, e.clientY - tap.sy) < 6) {
+      const n = this.toNorm(e.clientX, e.clientY, false, true);
+      this.routeTo(this.cellOf(n.x, n.y));   // a tap on a square adds the squares between it and the end of the route
     }
     if (this.shapeMode && this.interactive && tap && this.pointers.size === 1 && !this.multi
         && Math.hypot(e.clientX - tap.sx, e.clientY - tap.sy) < 6) {

@@ -24,7 +24,8 @@
 //   GET    /api/campaign/CODE     what the DM has chosen to share with players
 //   POST   /api/ping/CODE         a player pings a spot on the map  { x, y, pid?, id? }
 //   GET    /api/pings/CODE        recent pings (they fade after a few seconds)
-//   POST   /api/move/CODE         a player asks to move their character  { id, x, y }
+//   POST   /api/move/CODE         a player asks to move their character  { id, path: [[x, y]...], dash? }  (or just { id, x, y } with no grid)
+//   GET    /api/moveinfo/CODE/PID how far this character can move right now  (the player)
 //   DELETE /api/move/CODE/PID     cancel or clear a move request   (the player, or the DM with x-pin)
 //   GET    /api/locs/CODE         DM reads the saved locations (maps, grid, fog, token spots)  header x-pin
 //   PUT    /api/locs/CODE         DM saves them                  { doc }
@@ -312,6 +313,19 @@ async function purgeRoom(store, room) {
 
 /* Pings: short-lived markers anyone at the table can drop on the map. */
 const PING_TTL = 8000, MAX_PINGS = 12;
+
+/* Moving on a grid: every square is 5 feet. In combat a character can move up to their speed each turn
+   (twice that if they dash), and what they've already moved this turn is counted. Out of combat there's no limit. */
+const FT = 5, MAX_PATH = 160;
+const parseSpeed = (t) => { const m = /\d+/.exec(String(t ?? "")); return m ? Math.min(300, Number(m[0])) : null; };
+function moveAllowance(speed, e, init, dash) {
+  if (!init?.on) return { limited: false, speed, maxSteps: MAX_PATH - 1 };
+  const same = e.movedKey === `${init.round}:${init.turnId}`;
+  const used = same ? Number(e.moved) || 0 : 0;
+  const total = speed * (dash || (same && e.dashed) ? 2 : 1);
+  const left = Math.max(0, total - used);
+  return { limited: true, speed, used, total, left, maxSteps: Math.floor(left / FT), dashed: !!(dash || (same && e.dashed)) };
+}
 const livePings = async (store, room) => {
   const b = await store.get(`pings/${room}`, { type: "json" });
   const now = Date.now();
@@ -908,10 +922,35 @@ export default async (req) => {
       return reply({ ok: true, id });
     }
 
+    // How far can this character go? The DM's number on the token, else their character sheet, else 30 feet.
+    const speedOf = async (e) => {
+      if (Number.isFinite(e.speed)) return Math.max(0, Math.min(300, e.speed));
+      const sheet = readSheet(await store.get(await sheetKeyFor(e.id), { type: "json" }));
+      return parseSpeed(sheet?.char?.combat?.speed) ?? 30;
+    };
+
+    // The player's phone asks this when they start tracing a move, so it can show how much movement is left.
+    if (route === "moveinfo" && req.method === "GET") {
+      if (!sid) return fail(400, "Missing id.");
+      if (!(await mayActAs(sid))) return needLogin();
+      const state = await store.get(`state/${room}`, { type: "json" });
+      const e = state?.ents?.find((z) => z.id === sid && z.type === "pc");
+      if (!e) return fail(400, "Pick one of the player characters.");
+      const speed = await speedOf(e);
+      return reply({ ok: true, normal: moveAllowance(speed, e, state.init, false), dash: moveAllowance(speed, e, state.init, true) });
+    }
+
     // A player asks to move their character. Nothing moves until the DM approves.
     if (route === "move" && req.method === "POST") {
-      const { id, x, y } = await req.json().catch(() => ({}));
-      const nx = flt(x, 0, 1, NaN), ny = flt(y, 0, 1, NaN);
+      const { id, x, y, path: rawPath, dash } = await req.json().catch(() => ({}));
+      let path = null;
+      if (rawPath !== undefined && rawPath !== null) {
+        if (!Array.isArray(rawPath) || rawPath.length < 2 || rawPath.length > MAX_PATH) return fail(400, "Bad route.");
+        path = rawPath.map((p) => [flt(p?.[0], 0, 1, NaN), flt(p?.[1], 0, 1, NaN)]);
+        if (path.some(([a, b]) => !Number.isFinite(a) || !Number.isFinite(b))) return fail(400, "Bad route.");
+        path = path.map(([a, b]) => [Math.round(a * 10000) / 10000, Math.round(b * 10000) / 10000]);
+      }
+      const nx = path ? path[path.length - 1][0] : flt(x, 0, 1, NaN), ny = path ? path[path.length - 1][1] : flt(y, 0, 1, NaN);
       if (!Number.isFinite(nx) || !Number.isFinite(ny)) return fail(400, "Bad spot.");
       const state = await store.get(`state/${room}`, { type: "json" });
       const e = state?.ents?.find((z) => z.id === id && z.type === "pc");
@@ -920,9 +959,17 @@ export default async (req) => {
       if (!state.mapOn) return fail(403, "The map isn't showing right now.");
       if (state.init?.on) { if (state.init.turnId !== e.id) return fail(403, "It isn't your turn."); }
       else if (!state.freeExplore) return fail(403, "Free explore is off. Ask your DM.");
-      const t = Date.now();
-      await store.setJSON(`mvreq/${room}/${cleanId(e.id)}`, { id: e.id, x: nx, y: ny, t });
-      return reply({ ok: true, t });
+      const rec = { id: e.id, x: nx, y: ny, t: Date.now() };
+      if (path) {
+        const steps = path.length - 1, a = moveAllowance(await speedOf(e), e, state.init, !!dash);
+        if (a.limited && steps > a.maxSteps) {
+          return fail(403, a.maxSteps ? `That's ${steps * FT} feet, and you only have ${a.maxSteps * FT} feet of movement left.` : "You have no movement left this turn.");
+        }
+        Object.assign(rec, { path, cost: steps * FT, speed: a.speed });
+        if (a.limited) Object.assign(rec, { dash: !!(dash || a.dashed), left: a.left });
+      }
+      await store.setJSON(`mvreq/${room}/${cleanId(e.id)}`, rec);
+      return reply({ ok: true, t: rec.t });
     }
     if (route === "move" && req.method === "DELETE") {
       if (!sid) return fail(400, "Missing id.");

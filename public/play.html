@@ -51,7 +51,10 @@
       <div class="mapmsg" id="mapMsg" role="status"></div>
       <div class="mapmsg" id="moveReason"></div>
       <div class="movebar" id="moveBar" hidden>
-        <span>Move here?</span>
+        <span class="moveinfo" id="moveInfo">Move here?</span>
+        <button class="btn small" id="moveUndo" type="button" hidden>Undo</button>
+        <button class="btn small" id="moveClear" type="button" hidden>Clear</button>
+        <button class="btn small" id="moveDash" type="button" aria-pressed="false" hidden title="Spend your action to move twice as far this turn">Dash</button>
         <button class="btn small primary" id="moveSend" type="button">Send to DM</button>
         <button class="btn small" id="moveCancel" type="button">Cancel</button>
       </div>

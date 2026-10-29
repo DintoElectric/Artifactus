@@ -582,3 +582,18 @@ html.popwin,html.popwin body{height:100%;margin:0}
 .plitem.pld-read{border-left:3px solid var(--brass);background:rgba(212,170,92,.07)}
 .plitem.pld-option{border-left:3px solid var(--pc)}
 @media (max-width:560px){.plabil{grid-template-columns:repeat(3,minmax(0,1fr))}}
+
+/* ---------- tracing a move along the grid ---------- */
+.mv.routing{cursor:crosshair}
+.mv-over .route .rhalo{fill:none;stroke:rgba(10,13,20,.55);stroke-linecap:round;stroke-linejoin:round}
+.mv-over .route .rline{fill:none;stroke:var(--c);stroke-linecap:round;stroke-linejoin:round}
+.mv-over .route .rdot{fill:var(--c);stroke:rgba(10,13,20,.7)}
+.mv-over .route .rstart{fill:rgba(255,255,255,.08);stroke:var(--c);animation:rpulse 1.6s ease-in-out infinite}
+.mv-over .route text{fill:#fff;font-weight:700;text-anchor:middle;paint-order:stroke;stroke:rgba(10,13,20,.92);stroke-linejoin:round;font-family:var(--sans)}
+.mv-over .route.dashed{opacity:.92}
+@keyframes rpulse{0%,100%{opacity:.95}50%{opacity:.35}}
+.moveinfo{font-weight:700;color:var(--text);padding:0 .35rem;white-space:nowrap}
+.moveinfo.warn{color:var(--bad)}
+.movebar .btn[aria-pressed="true"]{background:var(--brass);color:var(--brass-ink);border-color:var(--brass)}
+.mrow .mwarn{display:block;font-size:.82rem;color:var(--bad)}
+.mrow .mnote{display:block;font-size:.82rem;color:var(--npc)}
