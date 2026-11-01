@@ -9,7 +9,7 @@ import { compressMap, makeThumb, MAP_ACCEPT } from "./images.js";
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 export const defaultGrid = (w, h) => ({
-  on: false, mode: "flat", size: Math.max(16, Math.round(Math.max(w, h) / 30)), snap: false, opacity: 0.3, dark: false, ox: 0, oy: 0, areas: [],
+  on: false, mode: "flat", size: Math.max(4, Math.round(Math.max(w, h) / 30)), snap: false, opacity: 0.3, dark: false, ox: 0, oy: 0, areas: [],
 });
 
 /* What gets remembered about a location from the live table. */
@@ -193,11 +193,17 @@ export function mountLocations(root, ctx) {
 
   async function replaceMap(id, file) {
     const loc = byId(id);
+    if (S().locId === id) syncActive();   // the saved record can trail the live table by a few seconds: catch it up first
     ctx.setSync("Uploading map…");
     try {
       const { rev, w, h, mapKind } = await uploadFiles(id, file);
-      Object.assign(loc, { mapRev: rev, mapW: w, mapH: h, mapKind, thumbRev: rev, fog: { on: loc.fog.on, rev: 0 } });
-      loc.grid = { ...loc.grid, size: defaultGrid(w, h).size, areas: [] };
+      // The same picture at a different resolution (a sharper copy)? Then the grid, outlines and fog still line up, so keep them.
+      const sameShape = loc.mapW > 0 && loc.mapH > 0 && Math.abs(w / h / (loc.mapW / loc.mapH) - 1) < 0.015;
+      const k = sameShape ? w / loc.mapW : 1;
+      Object.assign(loc, { mapRev: rev, mapW: w, mapH: h, mapKind, thumbRev: rev, fog: sameShape ? loc.fog : { on: loc.fog.on, rev: 0 } });
+      loc.grid = sameShape
+        ? { ...loc.grid, size: loc.grid.size * k, ox: (loc.grid.ox || 0) * k, oy: (loc.grid.oy || 0) * k, ...(loc.grid.lineW ? { lineW: loc.grid.lineW * k } : {}) }   // grid sizes are in picture pixels
+        : { ...loc.grid, size: defaultGrid(w, h).size, areas: [] };
       if (S().locId === id) {
         applyMap(S(), loc);
         ctx.setLocalMap(rev, localUrls.get(id).url);
@@ -207,7 +213,7 @@ export function mountLocations(root, ctx) {
       await saveDoc();
       render();
       ctx.setSync("Saved");
-      ctx.toast?.("Map replaced. The grid size was reset and the fog was cleared for the new image.");
+      ctx.toast?.(sameShape ? "Map replaced. It's the same picture, so your grid, fog and tokens are still lined up." : "Map replaced. The grid size was reset and the fog was cleared for the new image.");
     } catch (err) {
       ctx.setSync("Saved");
       ctx.toast?.(err.message || "Could not upload the map.");
@@ -297,7 +303,7 @@ export function mountLocations(root, ctx) {
         <h2>Add a location</h2>
         <label class="cf" style="margin-bottom:.7rem"><span>Name</span><input type="text" name="name" maxlength="80" placeholder="The Rusty Anchor" required autofocus></label>
         <label class="cf" style="margin-bottom:.7rem"><span>Map image or video loop</span><input type="file" name="file" accept="${MAP_ACCEPT}" required>
-          <small class="hint">A video should be a short MP4 or WebM loop under 4 MB. It plays silently and repeats.</small></label>
+          <small class="hint">Pictures keep up to 4096 pixels on the long side, so a bigger original zooms in sharper. A video should be a short MP4 or WebM loop under 4 MB. It plays silently and repeats.</small></label>
         <label class="cf" style="margin-bottom:.7rem"><span>Notes (optional)</span><textarea name="notes" rows="3" maxlength="1500" placeholder="What's here, secrets, who to meet"></textarea></label>
         <label class="check"><input type="checkbox" name="go" checked> Go there when it's saved</label>
         <div class="dlg-actions">
@@ -324,7 +330,7 @@ export function mountLocations(root, ctx) {
         <h2>Edit location</h2>
         <label class="cf" style="margin-bottom:.7rem"><span>Name</span><input type="text" name="name" maxlength="80" value="${esc(loc.name)}" required></label>
         <label class="cf" style="margin-bottom:.7rem"><span>Notes</span><textarea name="notes" rows="3" maxlength="1500">${esc(loc.notes)}</textarea></label>
-        <label class="cf" style="margin-bottom:.4rem"><span>Replace the map (resets the grid size and clears the fog)</span><input type="file" name="file" accept="${MAP_ACCEPT}"></label>
+        <label class="cf" style="margin-bottom:.4rem"><span>Replace the map. A sharper copy of the same picture keeps your grid and fog lined up. Anything else resets them.</span><input type="file" name="file" accept="${MAP_ACCEPT}"></label>
         <div class="dlg-actions">
           <button type="button" class="btn danger push" data-delete>Delete</button>
           <button type="button" class="btn" data-close>Cancel</button>

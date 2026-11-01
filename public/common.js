@@ -190,6 +190,10 @@ function project(M, u, v) {
 /* A pan/zoom map with draggable tokens. Token positions are stored as 0..1 fractions of the image. */
 /* Moving: every grid square is 5 feet. In combat a character can move up to their speed in feet each turn. */
 export const FT_PER_SQUARE = 5;
+/* Grid squares can be tiny (a detailed map with many small squares), so the smallest allowed is just 3 pixels. */
+export const MIN_SQUARE = 3;
+/* How thick grid lines are when the DM hasn't chosen: thin on small squares, the usual 2 pixels on big ones. */
+export const autoLineWidth = (size) => Math.min(2, Math.max(0.5, size * 0.035));
 export const turnKey = (init) => `${init?.round ?? 0}:${init?.turnId ?? ""}`;
 
 export class MapView {
@@ -356,7 +360,7 @@ export class MapView {
   render() {
     const { w, h } = this.dim;
     if (!w) return;
-    const g = Math.max(8, this.grid.size || 60);
+    const g = Math.max(MIN_SQUARE, this.grid.size || 60);
     this.renderGrid();
     this.renderShapes();
     this.renderOverlays(true);
@@ -514,7 +518,7 @@ export class MapView {
 
   /* How big (in picture pixels) is one grid square at this spot? Shrinks toward the far side of a perspective grid. */
   cellSizeAt(nx, ny) {
-    const flat = Math.max(8, this.grid.size || 60);
+    const flat = Math.max(MIN_SQUARE, this.grid.size || 60);
     const P = this.persp();
     if (!P) return flat;
     const uv = this.gridUV(P, nx, ny);
@@ -530,7 +534,7 @@ export class MapView {
     if (!this.dim.w || !this.grid.on) return null;
     const P = this.persp();
     if (P) return this.gridUV(P, nx, ny);
-    const g = Math.max(8, this.grid.size || 60), ox = this.grid.ox || 0, oy = this.grid.oy || 0;
+    const g = Math.max(MIN_SQUARE, this.grid.size || 60), ox = this.grid.ox || 0, oy = this.grid.oy || 0;
     return [(nx * this.dim.w - ox) / g, (ny * this.dim.h - oy) / g];
   }
 
@@ -552,7 +556,7 @@ export class MapView {
       const pt = this.gridPt(P, c + 0.5, r + 0.5);
       return pt ? { x: pt[0] / this.dim.w, y: pt[1] / this.dim.h } : null;
     }
-    const g = Math.max(8, this.grid.size || 60), ox = this.grid.ox || 0, oy = this.grid.oy || 0;
+    const g = Math.max(MIN_SQUARE, this.grid.size || 60), ox = this.grid.ox || 0, oy = this.grid.oy || 0;
     return { x: ((c + 0.5) * g + ox) / this.dim.w, y: ((r + 0.5) * g + oy) / this.dim.h };
   }
 
@@ -814,7 +818,7 @@ export class MapView {
       if (el._persp) { el.innerHTML = ""; el._persp = false; }
       return;
     }
-    const g = Math.max(8, gr.size || 60);
+    const g = Math.max(MIN_SQUARE, gr.size || 60);
     const op = clamp(gr.opacity ?? 0.3, 0.03, 1);
     const line = `rgba(${gr.dark ? "0,0,0" : "255,255,255"},${op})`;
     const P = gr.mode === "perspective" ? this.persp() : null;
@@ -822,9 +826,16 @@ export class MapView {
       // Perspective: draw each grid line from its projected end points; far lines are drawn thinner.
       el.style.backgroundImage = "none";
       let lines = "";
-      const widthAt = (V) => {
+      const spacingAt = (V) => {
         const a = this.gridPt(P, P.cols / 2 - 0.5, V), b = this.gridPt(P, P.cols / 2 + 0.5, V);
-        return a && b ? clamp(Math.hypot(a[0] - b[0], a[1] - b[1]) * 0.035, 1, 3.2) : 1.5;
+        return a && b ? Math.hypot(a[0] - b[0], a[1] - b[1]) : 0;
+      };
+      const mid = spacingAt(P.rows / 2) || 1;
+      const widthAt = (V) => {
+        const sp = spacingAt(V);
+        if (!sp) return 1.5;
+        // a width the DM chose scales with distance (thinner far away); otherwise thin lines on small squares
+        return gr.lineW > 0 ? clamp(gr.lineW * (sp / mid), gr.lineW * 0.4, gr.lineW * 1.6) : clamp(sp * 0.035, 0.5, 3.2);
       };
       for (let i = 0; i <= P.cols; i++) {
         const a = this.gridPt(P, i, 0), b = this.gridPt(P, i, P.rows);
@@ -838,8 +849,9 @@ export class MapView {
       el._persp = true;
     } else {
       if (el._persp) { el.innerHTML = ""; el._persp = false; }
+      const lw = gr.lineW > 0 ? gr.lineW : autoLineWidth(g);
       el.style.backgroundImage =
-        `linear-gradient(to right,${line} 2px,transparent 2px),linear-gradient(to bottom,${line} 2px,transparent 2px)`;
+        `linear-gradient(to right,${line} ${lw}px,transparent ${lw}px),linear-gradient(to bottom,${line} ${lw}px,transparent ${lw}px)`;
       el.style.backgroundSize = `${g}px ${g}px`;
       el.style.backgroundPosition = `${gr.ox || 0}px ${gr.oy || 0}px`;
     }
@@ -1094,7 +1106,7 @@ export class MapView {
     }
     if (this.gpan && e.pointerId === this.gpan.pid) {
       this.gpan = null;
-      const g = Math.max(8, this.grid.size || 60);
+      const g = Math.max(MIN_SQUARE, this.grid.size || 60);
       this.grid.ox = (((this.grid.ox || 0) % g) + g) % g;
       this.grid.oy = (((this.grid.oy || 0) % g) + g) % g;
       this.renderGrid();

@@ -1,4 +1,4 @@
-import { call, uid, esc, clamp, TYPES, OBJECT_ICONS, OBJECT_SHAPES, OBJECT_TINTS, OBJECT_PRESETS, STRUCT_SHAPES, MapView, pingColor, PING_TTL, defaultPersp, FT_PER_SQUARE, turnKey } from "./common.js";
+import { call, uid, esc, clamp, TYPES, OBJECT_ICONS, OBJECT_SHAPES, OBJECT_TINTS, OBJECT_PRESETS, STRUCT_SHAPES, MapView, pingColor, PING_TTL, defaultPersp, FT_PER_SQUARE, turnKey, MIN_SQUARE, autoLineWidth } from "./common.js";
 import { mountRoller } from "./dice.js";
 import { SheetStore, mountBook, mountNotes, blankSheet } from "./sheet.js";
 import { Library, parseSpells } from "./library.js";
@@ -167,9 +167,20 @@ function renderMap() {
   $("#freeExplore").checked = !!state.freeExplore;
   $("#autoApprove").checked = !!state.autoApprove;
   $("#autoJoin").checked = !!state.autoJoin;
-  const sz = $("#gridSize");
-  sz.max = Math.max(40, Math.round(Math.max(state.mapW, state.mapH) / 6));
-  sz.value = state.grid.size;
+  syncSizeControls();
+}
+
+/* The square-size slider, its number box, "squares across" and the line width all describe the same grid. */
+function r2(n) { return Math.round(n * 100) / 100; }
+function setIfIdle(el, v) { if (el && el.ownerDocument.activeElement !== el) el.value = v; }   // never overwrite what's being typed
+function syncSizeControls() {
+  const g = state.grid;
+  $("#gridSize").max = Math.max(40, Math.round(Math.max(state.mapW, state.mapH) / 6));
+  setIfIdle($("#gridSize"), g.size);
+  setIfIdle($("#gridSizeNum"), r2(g.size));
+  setIfIdle($("#gridAcross"), state.mapW ? r2(state.mapW / g.size) : "");
+  setIfIdle($("#gridLine"), r2(g.lineW > 0 ? g.lineW : autoLineWidth(g.size)));
+  $("#gridLineAuto").hidden = !(g.lineW > 0);
 }
 
 $("#upload").onclick = () => $("#file").click();
@@ -189,7 +200,18 @@ function gridChanged() {
   bump(); scheduleSave(300);
   mv.update({ grid: state.grid, ents: state.ents, turnId: state.init.on ? state.init.turnId : null, selId });
 }
-$("#gridSize").addEventListener("input", (e) => { state.grid.size = Number(e.target.value); gridChanged(); });
+function setSquare(v) {
+  if (!(v > 0)) { syncSizeControls(); return; }   // not a number: put the real size back in the box
+  state.grid.size = Math.min(2000, Math.max(MIN_SQUARE, v));
+  gridChanged();
+  syncSizeControls();
+}
+$("#gridSize").addEventListener("input", (e) => setSquare(Number(e.target.value)));
+$("#gridSizeNum").addEventListener("change", (e) => setSquare(Number(e.target.value)));
+// "How many squares fit across the map?" is how map makers describe a map, so let the DM just type that.
+$("#gridAcross").addEventListener("change", (e) => { const n = Number(e.target.value); if (n > 0 && state.mapW) setSquare(state.mapW / n); });
+$("#gridLine").addEventListener("input", (e) => { state.grid.lineW = Number(e.target.value); gridChanged(); syncSizeControls(); });
+$("#gridLineAuto").onclick = () => { delete state.grid.lineW; gridChanged(); syncSizeControls(); };
 $("#gridOpacity").addEventListener("input", (e) => { state.grid.opacity = Number(e.target.value) / 100; gridChanged(); });
 $("#gridDark").onchange = (e) => { state.grid.dark = e.target.checked; gridChanged(); };
 $("#resetGridPos").onclick = () => { state.grid.ox = 0; state.grid.oy = 0; gridChanged(); };
@@ -197,9 +219,9 @@ $("#gridBar").addEventListener("click", (e) => {
   const b = e.target.closest("[data-nudge]");
   if (!b) return;
   const [dx, dy] = b.dataset.nudge.split(",").map(Number);
-  const g = state.grid.size;
-  state.grid.ox = ((((state.grid.ox || 0) + dx * 2) % g) + g) % g;
-  state.grid.oy = ((((state.grid.oy || 0) + dy * 2) % g) + g) % g;
+  const g = state.grid.size, step = clamp(g / 25, 0.25, 2);   // small squares need smaller nudges
+  state.grid.ox = ((((state.grid.ox || 0) + dx * step) % g) + g) % g;
+  state.grid.oy = ((((state.grid.oy || 0) + dy * step) % g) + g) % g;
   gridChanged();
 });
 $("#alignBtn").onclick = () => setMode("align");

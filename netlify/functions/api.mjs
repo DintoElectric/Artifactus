@@ -343,10 +343,11 @@ function cleanGrid(g) {
   // Perspective grid: four corners (a little outside the picture is fine) plus how many squares across and deep.
   const quad = Array.isArray(g.quad) && g.quad.length === 4 && g.quad.every((p) => Array.isArray(p))
     ? g.quad.map((p) => [flt(p[0], -0.5, 1.5, 0.5), flt(p[1], -0.5, 1.5, 0.5)]) : null;
-  const out = { on: !!g.on, size: flt(g.size, 8, 2000, 60), snap: !!g.snap, opacity: flt(g.opacity, 0.03, 1, 0.3), dark: !!g.dark,
+  const out = { on: !!g.on, size: flt(g.size, 3, 2000, 60), snap: !!g.snap, opacity: flt(g.opacity, 0.03, 1, 0.3), dark: !!g.dark,
     ox: flt(g.ox, -5000, 5000, 0), oy: flt(g.oy, -5000, 5000, 0), areas,
     mode: g.mode === "perspective" && quad ? "perspective" : "flat" };
   if (quad) { out.quad = quad; out.cols = num(g.cols, 1, 120, 10); out.rows = num(g.rows, 1, 120, 14); }
+  if (Number(g.lineW) > 0) out.lineW = flt(g.lineW, 0.2, 12, 2);   // a grid line width the DM chose (otherwise it's automatic)
   return out;
 }
 function cleanLocs(d) {
