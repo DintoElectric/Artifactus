@@ -5,6 +5,7 @@ import { Library, parseSpells } from "./library.js";
 import { openPopout } from "./popout.js";
 import { mountChar } from "./charsheet.js";
 import { mountCampaign } from "./campaign-ui.js";
+import { mountCreatures } from "./creatures.js";
 import { mountLocations } from "./locations.js";
 
 let popDoc = null;   // the map window's page, while the map is on another screen
@@ -340,7 +341,7 @@ $("#revealPcs").onclick = () => {
 };
 
 /* ---------- tabs ---------- */
-const TABS = { map: ["tabMap", "paneMap"], loc: ["tabLoc", "paneLoc"], inv: ["tabInv", "paneInv"], party: ["tabParty", "paneParty"], obj: ["tabObj", "paneObj"], camp: ["tabCamp", "paneCamp"] };
+const TABS = { map: ["tabMap", "paneMap"], loc: ["tabLoc", "paneLoc"], inv: ["tabInv", "paneInv"], party: ["tabParty", "paneParty"], obj: ["tabObj", "paneObj"], crea: ["tabCrea", "paneCrea"], camp: ["tabCamp", "paneCamp"] };
 function setTab(t) {
   tab = t;
   for (const [k, [btn, pane]] of Object.entries(TABS)) {
@@ -354,6 +355,7 @@ function setTab(t) {
   if (t === "party") { renderParty(); pullSheets(); }
   if (t === "obj") renderObjectives();
   if (t === "camp") ensureCampaign();
+  if (t === "crea") ensureCreatures();
   if (t === "loc") locs?.render();
 }
 
@@ -405,6 +407,19 @@ mapHolder.addEventListener("click", (e) => {
 
 /* Campaign details and session log: loaded the first time the tab is opened. */
 let campaign = null;
+
+/* ---------- NPCs and enemies (the library of stat blocks) ---------- */
+let creatures = null;
+function ensureCreatures() {
+  if (creatures) return creatures;
+  creatures = mountCreatures($("#creaRoot"), { room, pin, toast, addToMap: addPlannedTokens, showTab: () => setTab("crea") });
+  creatures.load();
+  return creatures;
+}
+async function showStats(cid) {
+  const ok = await ensureCreatures().card(cid);
+  if (!ok) toast("That creature isn't in the NPCs & Enemies library any more.");
+}
 function ensureCampaign() {
   if (campaign) return;
   campaign = mountCampaign($("#campRoot"), {
@@ -413,6 +428,8 @@ function ensureCampaign() {
     onShared(rev) { state.campRev = rev; bump(); scheduleSave(); },
     // Session plans: put creatures on the map, and jump to the saved maps a plan mentions.
     addToMap: addPlannedTokens,
+    saveToLibrary: (spec) => ensureCreatures().add(spec),
+    getLibrary: () => ensureCreatures().list(),
     getLocations: () => locs?.list() || [],
     goToLocation(id) { locs?.openSwitch(id); },
   });
@@ -473,9 +490,10 @@ function addTokens(name, type, count, preset, extra = null) {
 }
 
 /* From a session plan: put NPCs or stat-block creatures on the map, with their hit points and initiative bonus. */
-function addPlannedTokens({ name, type = "enemy", count = 1, hp = null, maxHp = null, initMod = 0, hidden = false, toInit = false }) {
+function addPlannedTokens({ name, type = "enemy", count = 1, hp = null, maxHp = null, initMod = 0, hidden = false, toInit = false, cid = "" }) {
   if (!["npc", "enemy"].includes(type)) return 0;
   const extra = { hidden: !!hidden };
+  if (cid) extra.cid = cid;   // which library entry this came from, so its stat block is one tap away
   if (hp) { extra.hp = hp; extra.maxHp = maxHp || hp; }
   if (initMod) extra.initMod = initMod;
   const made = addTokens(name, type, Math.max(1, Math.min(20, count)), null, extra);
@@ -497,6 +515,7 @@ function editToken(id) {
   openDlg(`
     <form>
       <h2>Edit token</h2>
+      ${e.cid ? '<p style="margin:0 0 .6rem"><button type="button" class="btn small" data-stats>View its stat block</button></p>' : ""}
       <div class="field"><label for="f_name">Name</label><input id="f_name" name="name" type="text" value="${esc(e.name)}" maxlength="40" required></div>
       <div class="field"><label for="f_type">Type</label><select id="f_type" name="type">
         ${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${e.type === k ? "selected" : ""}>${v.label}</option>`).join("")}</select></div>
@@ -569,6 +588,7 @@ function editToken(id) {
       if (file) uploadTokenImage(e, file);
     },
     (root) => {
+      root.querySelector("[data-stats]")?.addEventListener("click", () => { dlg.close(); showStats(e.cid); });
       // Show the size box for people, or the picture / size / turn boxes for objects.
       const sync = () => {
         const obj = root.querySelector("#f_type").value === "object";
@@ -784,6 +804,7 @@ function renderTokens() {
       <button class="btn small ghost" data-act="vis" aria-pressed="${!!e.hidden}">${e.hidden ? "Hidden" : "Visible"}</button>
       ${e.type === "object" ? `<button class="btn small ghost" data-act="rot" aria-label="Turn ${esc(e.name)} 90 degrees" title="Turn 90°">↻</button>` : ""}
       <button class="btn small ghost" data-act="init" aria-pressed="${inInit}">Init</button>
+      ${e.cid ? '<button class="btn small ghost" data-act="stats" title="Show its stat block">Stats</button>' : ""}
       <button class="btn small ghost" data-act="edit">Edit</button>
     </li>`;
   }).join("") || '<li class="empty">No tokens yet. Add your players first.</li>';
@@ -803,6 +824,7 @@ $("#tokList").addEventListener("click", (ev) => {
       if (state.init.list.some((i) => i.id === id)) removeFromInit(id, true);
       else { addToInit(id); changed(); }
       break;
+    case "stats": showStats(e.cid); break;
     case "edit": editToken(id); break;
   }
 });

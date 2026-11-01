@@ -597,3 +597,47 @@ html.popwin,html.popwin body{height:100%;margin:0}
 .movebar .btn[aria-pressed="true"]{background:var(--brass);color:var(--brass-ink);border-color:var(--brass)}
 .mrow .mwarn{display:block;font-size:.82rem;color:var(--bad)}
 .mrow .mnote{display:block;font-size:.82rem;color:var(--npc)}
+
+/* ---------- NPCs & Enemies (the library of stat blocks) ---------- */
+.crea{flex:1;min-height:0;display:flex;flex-direction:column}
+.creasearch{width:12rem;min-height:36px;padding:.2rem .6rem}
+.creabody{flex:1;min-height:0;display:grid;grid-template-columns:270px minmax(0,1fr);gap:1rem;padding:.9rem;overflow:hidden}
+.crealist{display:grid;gap:.35rem;align-content:start;overflow:auto;min-height:0;padding-right:.2rem}
+.crow{width:100%;text-align:left;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.05rem .5rem;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:.5rem .65rem}
+.crow .cname{font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.crow small{grid-column:1/-1;color:var(--mute)}
+.crow.sel{border-color:var(--brass);background:var(--panel2)}
+.ctype{font-size:.75rem;font-weight:700;letter-spacing:.03em;text-transform:uppercase;padding:.05rem .45rem;border-radius:999px;align-self:center;border:1px solid var(--line);color:var(--mute)}
+.ctype.npc{color:var(--npc);border-color:var(--npc)}
+.ctype.enemy{color:var(--enemy);border-color:var(--enemy)}
+.creaedit{min-width:0;overflow:auto;display:grid;gap:.7rem;align-content:start;padding-right:.3rem}
+.creaedit input[type=text],.creaedit input[type=number],.creaedit select,.creaedit textarea{width:100%;min-width:0}
+.creaedit textarea{resize:vertical}
+.creahead .crcr{flex:0 0 7rem}
+.crea-actions{display:flex;gap:.4rem;flex-wrap:wrap}
+.crea-sec{border:1px solid var(--line);border-radius:12px;padding:.6rem .8rem .8rem;display:grid;gap:.6rem;margin:0}
+.crea-sec>legend{font-family:var(--serif);font-weight:700;font-size:1.05rem;padding:0 .4rem}
+.creaempty{text-align:center;padding:2.5rem 1rem}
+.creaempty h2{margin:0 0 .4rem}
+@media (max-width:760px){.creabody{grid-template-columns:1fr;overflow:auto}.crealist{max-height:14rem}}
+.plfoot{display:flex;gap:.4rem;flex-wrap:wrap}
+.libpick{display:grid;gap:.15rem;max-height:46vh;overflow:auto;margin-bottom:.6rem}
+.libitem{display:flex;gap:.55rem;align-items:flex-start;padding:.35rem .4rem;border-radius:8px}
+.libitem:hover{background:var(--panel2)}
+.libitem span{display:grid}
+.libitem small{color:var(--mute)}
+
+/* the read-only stat block card */
+.cardwrap{display:grid;gap:.7rem}
+.statcard{background:var(--panel2);border:1px solid var(--line);border-top:4px solid var(--enemy);border-radius:10px;padding:.8rem 1rem;max-height:62vh;overflow:auto}
+.statcard.npc{border-top-color:var(--npc)}
+.statcard h2{margin:0;font-family:var(--serif);font-size:1.45rem}
+.statcard hr{border:0;border-top:1px solid var(--line);margin:.5rem 0}
+.sc-sub{margin:.1rem 0 0;color:var(--mute);font-style:italic}
+.sc-line{margin:.15rem 0}
+.sc-line b,.sc-h{color:var(--brass)}
+.sc-abil{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:.3rem;text-align:center}
+.sc-abil div{display:grid}
+.sc-abil b{color:var(--brass);font-size:.85rem}
+.sc-h{margin:.7rem 0 .15rem;font-family:var(--serif);font-size:1.05rem;border-bottom:1px solid var(--line)}
+.sc-text{white-space:pre-wrap;line-height:1.4}

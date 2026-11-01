@@ -4,7 +4,8 @@ import { mod } from "./charsheet.js";
 
 /* The DM's prep for one session. Everything here is private to the DM.
    mountPlan(container, plan, opts) draws the editor into `container` and edits `plan` in place.
-   opts: { touch(), toast(msg), ask(html, onSubmit), addToMap(spec), getLocations(), goToLocation(id) } */
+   opts: { touch(), toast(msg), ask(html, onSubmit), addToMap(spec), getLocations(), goToLocation(id),
+           saveToLibrary(creature), getLibrary() }  (the last two connect to the NPCs & Enemies library) */
 
 const BEAT_KINDS = [["scene", "Scene"], ["combat", "Combat"], ["social", "Social"], ["explore", "Exploration"], ["puzzle", "Puzzle or trap"], ["reveal", "Reveal"]];
 const DIALOGUE_KINDS = [["read", "Read aloud"], ["say", "NPC says"], ["option", "Player option"], ["other", "Other"]];
@@ -27,6 +28,16 @@ const SECTIONS = [
   { key: "notes", title: "Contingencies and notes" },
 ];
 
+/* Creatures can be kept in the library and pulled back into a plan. */
+const LIB_SECS = new Set(["npcs", "enemies"]);
+const STAT_KEYS = ["name", "kind", "ac", "hp", "hpNote", "speed", "saves", "skills", "resist", "senses", "languages", "cr", "traits", "actions", "extra", "count"];
+const toCreature = (sec, r) => (sec === "npcs"
+  ? { type: "npc", name: r.name, role: r.role, wants: r.wants, secret: r.secret, voice: r.voice, notes: r.notes }
+  : { type: "enemy", ...Object.fromEntries(STAT_KEYS.map((k) => [k, r[k]])), abilities: { ...r.abilities } });
+const fromCreature = (sec, c) => (sec === "npcs"
+  ? { id: uid(), name: c.name, role: c.role, wants: c.wants, secret: c.secret, voice: c.voice, notes: c.notes }
+  : { ...blankStats(), ...Object.fromEntries(STAT_KEYS.map((k) => [k, c[k]])), abilities: { ...c.abilities }, id: uid() });
+
 function countText(key, plan) {
   const l = plan[key];
   const done = Array.isArray(l) ? l.filter((x) => x.done).length : 0;
@@ -39,7 +50,7 @@ function countText(key, plan) {
 }
 
 export function mountPlan(container, plan, opts) {
-  const { touch, toast, ask, addToMap, getLocations, goToLocation } = opts;
+  const { touch, toast, ask, addToMap, getLocations, goToLocation, saveToLibrary, getLibrary } = opts;
 
   /* ----- small pieces of markup ----- */
   const ta = (f, v, rows, ph, max) => `<textarea data-pf="${f}" rows="${rows}" maxlength="${max}" placeholder="${esc(ph)}" aria-label="${esc(ph)}">${esc(v)}</textarea>`;
@@ -83,7 +94,7 @@ export function mountPlan(container, plan, opts) {
 
     npcs: (b) => `
       <div class="plrow">${inp("name", b.name, "Name", 80, 'class="plname"')}${inp("role", b.role, "Who they are (innkeeper, spy...)", 120)}
-        ${actions('<button class="btn small" type="button" data-ptomap>Add to map</button>')}</div>
+        ${actions('<button class="btn small" type="button" data-ptomap>Add to map</button><button class="btn small ghost" type="button" data-psave title="Keep this NPC in the NPCs &amp; Enemies library">Save to library</button>')}</div>
       <div class="plgrid2">
         <label class="cf"><span>Wants</span>${ta("wants", b.wants, 2, "What they want", 1000)}</label>
         <label class="cf"><span>Secret</span>${ta("secret", b.secret, 2, "What they're hiding", 1000)}</label>
@@ -100,7 +111,7 @@ export function mountPlan(container, plan, opts) {
 
     enemies: (e) => `
       <div class="plrow">${inp("name", e.name, "Creature name", 60, 'class="plname"')}${inp("kind", e.kind, "Medium humanoid, neutral evil", 100)}
-        ${actions('<button class="btn small" type="button" data-ptomap>Add to map…</button>')}</div>
+        ${actions('<button class="btn small" type="button" data-ptomap>Add to map…</button><button class="btn small ghost" type="button" data-psave title="Keep this stat block in the NPCs &amp; Enemies library">Save to library</button>')}</div>
       <div class="plgrid">
         <label class="cf"><span>Armor class</span>${inp("ac", e.ac, "15 (leather)", 30)}</label>
         <label class="cf"><span>Hit points</span><input type="number" inputmode="numeric" data-pf="hp" min="0" max="9999" value="${e.hp}"></label>
@@ -139,7 +150,7 @@ export function mountPlan(container, plan, opts) {
       ? `<textarea data-pt="notes" rows="5" maxlength="8000" placeholder="If they go off the rails, spare ideas, things to remember" aria-label="Contingencies and notes">${esc(plan.notes)}</textarea>`
       : `${plan[sec.key].length ? "" : '<p class="hint" style="margin:0">Nothing yet.</p>'}
          ${plan[sec.key].map((it) => `<article class="${itemClass(sec.key, it)}" data-sec="${sec.key}" data-id="${it.id}">${ITEM[sec.key](it)}</article>`).join("")}
-         <button class="btn small" type="button" data-padd="${sec.key}">${sec.add}</button>`;
+         <div class="plfoot"><button class="btn small" type="button" data-padd="${sec.key}">${sec.add}</button>${LIB_SECS.has(sec.key) ? `<button class="btn small ghost" type="button" data-plib="${sec.key}">Add from library</button>` : ""}</div>`;
     return `<details class="plsec" id="ps-${sec.key}" data-sec="${sec.key}" ${openSections.has(sec.key) ? "open" : ""}>
       <summary><span>${sec.title}</span><small class="plcount" data-count="${sec.key}">${countText(sec.key, plan)}</small></summary>
       <div class="plbody">${body}</div></details>`;
@@ -223,6 +234,8 @@ export function mountPlan(container, plan, opts) {
       if (d) { d.open = true; d.scrollIntoView?.({ block: "start", behavior: "smooth" }); }
       return;
     }
+    const lib = e.target.closest("[data-plib]");
+    if (lib) { pickFromLibrary(lib.dataset.plib); return; }
     const add = e.target.closest("[data-padd]");
     if (add) {
       const sec = SECTIONS.find((s) => s.key === add.dataset.padd);
@@ -258,8 +271,54 @@ export function mountPlan(container, plan, opts) {
       return;
     }
     if (e.target.closest("[data-pgoto]")) { if (list[i].locId) goToLocation?.(list[i].locId); return; }
+    if (e.target.closest("[data-psave]")) { saveToLib(sec, list[i]); return; }
     if (e.target.closest("[data-ptomap]")) toMap(sec, list[i]);
   });
+
+  /* ----- the NPCs & Enemies library ----- */
+  async function saveToLib(sec, rec) {
+    const name = rec.name.trim();
+    if (!name) { toast("Give it a name first."); return; }
+    const type = sec === "npcs" ? "npc" : "enemy";
+    const have = (await getLibrary?.()) || [];
+    if (have.some((c) => c.type === type && c.name.trim().toLowerCase() === name.toLowerCase())) {   // don't pile up duplicates
+      toast(`${name} is already in NPCs & Enemies. Rename this one if it's a different ${type === "npc" ? "NPC" : "creature"}.`);
+      return;
+    }
+    const saved = await saveToLibrary?.(toCreature(sec, rec));
+    toast(saved ? `${name} is saved in NPCs & Enemies.` : "Couldn't save it to the library.");
+  }
+
+  async function pickFromLibrary(sec) {
+    const all = (await getLibrary?.()) || [];
+    const list = (sec === "npcs" ? all.filter((c) => c.type === "npc") : all)
+      .sort((a, b) => (a.name || "~").localeCompare(b.name || "~", undefined, { sensitivity: "base" }));
+    if (!list.length) { toast(sec === "npcs" ? "There are no NPCs in the library yet." : "The library is empty so far."); return; }
+    const d = ask(`
+      <form>
+        <h2>Add from the library</h2>
+        <input type="search" data-pfilter placeholder="Search" aria-label="Search the library" style="width:100%;margin-bottom:.5rem">
+        <div class="libpick">${list.map((c) => `
+          <label class="check libitem" data-name="${esc([c.name, c.kind, c.tags, c.role].join(" ").toLowerCase())}">
+            <input type="checkbox" name="pick_${c.id}"><span><b>${esc(c.name || "Unnamed")}</b>
+            <small>${esc([c.type === "npc" ? "NPC" : "Enemy", c.cr && `CR ${c.cr}`, c.role || c.kind].filter(Boolean).join(" · "))}</small></span></label>`).join("")}</div>
+        <div class="dlg-actions"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary">Add to the plan</button></div>
+      </form>`,
+      (data, close) => {
+        const ids = Object.keys(data).filter((k) => k.startsWith("pick_")).map((k) => k.slice(5));
+        let n = 0;
+        for (const id of ids) {
+          const c = list.find((x) => x.id === id);
+          if (c) { plan[sec].push(fromCreature(sec, c)); n++; }
+        }
+        close();
+        if (n) { openSections.add(sec); touch(); render(); toast(`Added ${n} to the plan.`); }
+      });
+    d?.querySelector("[data-pfilter]")?.addEventListener("input", (ev) => {
+      const q = ev.target.value.toLowerCase().trim();
+      d.querySelectorAll(".libitem").forEach((l) => { l.hidden = !!q && !l.dataset.name.includes(q); });
+    });
+  }
 
   /* ----- onto the map ----- */
   function toMap(sec, rec) {

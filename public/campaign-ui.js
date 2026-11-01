@@ -10,7 +10,7 @@ const rowsFor = (text) => Math.max(3, Math.min(14, Math.ceil(String(text).length
 
 /* onShared(rev) is called when the part players can see has changed, so their phones refresh.
    addToMap(spec), getLocations() and goToLocation(id) connect a session plan to the map and saved locations. */
-export function mountCampaign(root, { room, pin, toast, onShared, addToMap, getLocations, goToLocation }) {
+export function mountCampaign(root, { room, pin, toast, onShared, addToMap, getLocations, goToLocation, saveToLibrary, getLibrary }) {
   let doc = null, view = "details", selId = "", loadFailed = false;
   const sviews = new Map();   // per session: showing its plan or its log
   let status = "saved", saving = false, dirty = false, timer = null, lastShared = "";
@@ -107,6 +107,7 @@ export function mountCampaign(root, { room, pin, toast, onShared, addToMap, getL
       onSubmit(Object.fromEntries(new FormData(e.target)), () => dlg.close());
     };
     dlg.showModal();
+    return dlg;
   }
 
   const planTouch = () => {
@@ -128,7 +129,7 @@ export function mountCampaign(root, { room, pin, toast, onShared, addToMap, getL
         <div class="sedit">${s ? sessionEditor(s) : '<p class="empty">Choose a session, or add a new one.</p>'}</div>
       </div>`;
     const pc = body.querySelector("[data-plan]");
-    if (pc && s) mountPlan(pc, s.plan, { touch: planTouch, toast: (m) => toast?.(m), ask, addToMap, getLocations, goToLocation });
+    if (pc && s) mountPlan(pc, s.plan, { touch: planTouch, toast: (m) => toast?.(m), ask, addToMap, getLocations, goToLocation, saveToLibrary, getLibrary });
   }
 
   const sessionEditor = (s) => {

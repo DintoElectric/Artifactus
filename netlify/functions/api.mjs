@@ -24,6 +24,7 @@
 //   GET    /api/campaign/CODE     what the DM has chosen to share with players
 //   POST   /api/ping/CODE         a player pings a spot on the map  { x, y, pid?, id? }
 //   GET    /api/pings/CODE        recent pings (they fade after a few seconds)
+//   GET/PUT /api/bestiary/CODE    the DM's library of NPCs and enemies (stat blocks)  { doc: { creatures: [...] } }   header x-pin
 //   POST   /api/move/CODE         a player asks to move their character  { id, path: [[x, y]...], dash? }  (or just { id, x, y } with no grid)
 //   GET    /api/moveinfo/CODE/PID how far this character can move right now  (the player)
 //   DELETE /api/move/CODE/PID     cancel or clear a move request   (the player, or the DM with x-pin)
@@ -102,7 +103,7 @@ function publicView(s) {
     .filter((e) => !e.hidden)
     .map((e) => {
       visible.add(e.id);
-      return e.type === "pc" ? e : { ...e, hp: null, maxHp: null, initMod: undefined };   // players don't see enemy HP or initiative bonuses
+      return e.type === "pc" ? e : { ...e, hp: null, maxHp: null, initMod: undefined, cid: undefined };   // players don't see enemy HP, initiative bonuses, or which library entry a token came from
     });
   const inv = { stash: s.inv?.stash || [] };
   for (const e of ents) if (e.type === "pc") inv[e.id] = s.inv?.[e.id] || [];
@@ -232,6 +233,31 @@ const CAMP_SHARE = ["overview", "premise", "themes", "setting", "factions", "rul
 const CAMP_ALL = [...CAMP_SHARE, "secrets"];                       // "secrets" can never be shared
 const SESS_SHARE = ["recap", "accomplished", "learned", "earned", "npcs", "threads"];
 const SESS_ALL = [...SESS_SHARE, "dmnotes"];                       // "dmnotes" can never be shared
+/* The DM's library of NPCs and enemies: stat blocks kept for the whole campaign. Private to the DM. */
+function cleanCreatures(d) {
+  const list = Array.isArray(d?.creatures) ? d.creatures : [];
+  const creatures = list.slice(0, 400).map((c) => {
+    if (!c || typeof c !== "object") return null;
+    const ab = c.abilities && typeof c.abilities === "object" ? c.abilities : {};
+    const abilities = {};
+    for (const k of ABIL) abilities[k] = num(ab[k], 1, 30, 10);
+    return {
+      id: cleanId(c.id) || Math.random().toString(36).slice(2, 9),
+      type: c.type === "npc" ? "npc" : "enemy",
+      name: str(c.name, 60), kind: str(c.kind, 100), tags: str(c.tags, 120), role: str(c.role, 120),
+      ac: str(c.ac, 30), hp: num(c.hp, 0, 9999, 0), hpNote: str(c.hpNote, 40), speed: str(c.speed, 80), abilities,
+      saves: str(c.saves, 120), skills: str(c.skills, 200), resist: str(c.resist, 250), senses: str(c.senses, 200), languages: str(c.languages, 200), cr: str(c.cr, 12),
+      traits: str(c.traits, 4000), actions: str(c.actions, 4000), extra: str(c.extra, 4000),
+      wants: str(c.wants, 1000), secret: str(c.secret, 1000), voice: str(c.voice, 500), notes: str(c.notes, 3000),
+      count: num(c.count, 1, 20, 1), updated: num(c.updated, 0, 9e15, 0),
+    };
+  }).filter(Boolean);
+  const seen = new Set();   // every creature needs its own id
+  for (const c of creatures) { while (seen.has(c.id)) c.id = Math.random().toString(36).slice(2, 9); seen.add(c.id); }
+  return { creatures };
+}
+const readBestiary = (raw) => ({ rev: raw?.rev || 0, ...cleanCreatures(raw) });
+
 /* A session plan: the DM's prep for a session. It is private: players never receive any of it. */
 const BEAT_KINDS = ["scene", "combat", "social", "explore", "puzzle", "reveal"];
 const DIALOGUE_KINDS = ["read", "say", "option", "other"];
@@ -304,7 +330,7 @@ async function acctFromToken(store, token) {
   return a && (await acctToken(a)) === `${id}.${sig}` ? a : null;
 }
 async function purgeRoom(store, room) {
-  const kinds = ["state", "map", "fog", "thumb", "img", "sub", "pcu", "mvreq", "pings", "roll", "sheet", "login", "lib", "camp", "locs", "own", "joinreq", "meta"];
+  const kinds = ["state", "map", "fog", "thumb", "img", "sub", "pcu", "mvreq", "pings", "roll", "sheet", "login", "lib", "camp", "bestiary", "locs", "own", "joinreq", "meta"];
   for (const k of kinds) {
     const { blobs } = await store.list({ prefix: `${k}/${room}` });
     await Promise.all(blobs.map((b) => store.delete(b.key)));
@@ -901,6 +927,20 @@ export default async (req) => {
       try { body = JSON.parse(text); } catch { return fail(400, "Bad data."); }
       const rev = (prev?.rev || 0) + 1;
       await store.setJSON(`camp/${room}`, { ...cleanCamp(body.doc), rev });
+      return reply({ ok: true, rev });
+    }
+
+    if (route === "bestiary" && (req.method === "GET" || req.method === "PUT")) {
+      const denied = await dmOnly();
+      if (denied) return denied;
+      const prev = await store.get(`bestiary/${room}`, { type: "json" });
+      if (req.method === "GET") return reply({ doc: readBestiary(prev) });
+      const text = await req.text();
+      if (text.length > 1500000) return fail(413, "The library is too large.");
+      let body;
+      try { body = JSON.parse(text); } catch { return fail(400, "Bad data."); }
+      const rev = (prev?.rev || 0) + 1;
+      await store.setJSON(`bestiary/${room}`, { ...cleanCreatures(body.doc), rev });
       return reply({ ok: true, rev });
     }
 
