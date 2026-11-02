@@ -641,3 +641,18 @@ html.popwin,html.popwin body{height:100%;margin:0}
 .sc-abil b{color:var(--brass);font-size:.85rem}
 .sc-h{margin:.7rem 0 .15rem;font-family:var(--serif);font-size:1.05rem;border-bottom:1px solid var(--line)}
 .sc-text{white-space:pre-wrap;line-height:1.4}
+
+/* ---------- resizing a token: handles on the selected token ---------- */
+.tok-handle{position:absolute;display:none;z-index:7;touch-action:none;cursor:nwse-resize;
+  width:min(calc(22px * var(--inv,1)),55%);height:min(calc(22px * var(--inv,1)),55%);
+  background:var(--brass);border:calc(2px * var(--inv,1)) solid #fff;border-radius:calc(5px * var(--inv,1));
+  box-shadow:0 0 0 calc(1px * var(--inv,1)) rgba(0,0,0,.65)}
+.tok.sel .tok-handle{display:block}
+.tok-handle.h-se{right:calc(-11px * var(--inv,1));bottom:calc(-11px * var(--inv,1))}
+.tok-handle.h-e{right:calc(-11px * var(--inv,1));top:50%;transform:translateY(-50%);cursor:ew-resize}
+.tok-handle.h-s{bottom:calc(-11px * var(--inv,1));left:50%;transform:translateX(-50%);cursor:ns-resize}
+.tok:not(.obj) .tok-handle.h-e,.tok:not(.obj) .tok-handle.h-s{display:none}
+.tok-dim{display:none;position:absolute;left:50%;bottom:calc(100% + 12px * var(--inv,1));z-index:8;pointer-events:none;white-space:nowrap;
+  transform:translateX(-50%) rotate(calc(var(--rot,0deg) * -1));font-size:calc(15px * var(--inv,1));font-weight:700;color:#fff;
+  background:rgba(10,13,20,.94);border:1px solid var(--brass);border-radius:.45em;padding:.1em .55em}
+.tok.resizing .tok-dim{display:block}

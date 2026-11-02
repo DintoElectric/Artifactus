@@ -190,6 +190,9 @@ function project(M, u, v) {
 /* A pan/zoom map with draggable tokens. Token positions are stored as 0..1 fractions of the image. */
 /* Moving: every grid square is 5 feet. In combat a character can move up to their speed in feet each turn. */
 export const FT_PER_SQUARE = 5;
+/* How small and how big a token can be, counted in grid squares. Objects can be anything from a coin to a castle; people are
+   from tiny to gargantuan. */
+export const OBJECT_MIN = 0.1, OBJECT_MAX = 40, PERSON_MIN = 0.25, PERSON_MAX = 8;
 /* Grid squares can be tiny (a detailed map with many small squares), so the smallest allowed is just 3 pixels. */
 export const MIN_SQUARE = 3;
 /* How thick grid lines are when the DM hasn't chosen: thin on small squares, the usual 2 pixels on big ones. */
@@ -372,7 +375,8 @@ export class MapView {
         el = document.createElement("div");
         el.className = "tok";
         el.dataset.id = e.id;
-        el.innerHTML = '<svg class="tok-shape" xmlns="http://www.w3.org/2000/svg"></svg><img class="tok-img" alt="" draggable="false"><span class="tok-face"></span><span class="tok-name"></span>';
+        el.innerHTML = '<svg class="tok-shape" xmlns="http://www.w3.org/2000/svg"></svg><img class="tok-img" alt="" draggable="false"><span class="tok-face"></span><span class="tok-name"></span>'
+          + (this.interactive ? '<span class="tok-handle h-e" data-handle="e" title="Drag to change the width"></span><span class="tok-handle h-s" data-handle="s" title="Drag to change the height"></span><span class="tok-handle h-se" data-handle="se" title="Drag to make it bigger or smaller"></span><span class="tok-dim"></span>' : "");
         el._shape = el.children[0];
         el._img = el.children[1];
         el._face = el.children[2];
@@ -701,8 +705,8 @@ export class MapView {
   sizeToken(el, e, x, y) {
     const base = this.cellSizeAt(x, y);
     const obj = e.type === "object";
-    const ws = base * (obj ? clamp(Number(e.w) || 1, 0.25, 12) : e.size || 1);
-    const hs = base * (obj ? clamp(Number(e.h) || 1, 0.25, 12) : e.size || 1);
+    const ws = base * (obj ? clamp(Number(e.w) || 1, OBJECT_MIN, OBJECT_MAX) : clamp(Number(e.size) || 1, PERSON_MIN, PERSON_MAX));
+    const hs = base * (obj ? clamp(Number(e.h) || 1, OBJECT_MIN, OBJECT_MAX) : clamp(Number(e.size) || 1, PERSON_MIN, PERSON_MAX));
     el.style.width = ws + "px";
     el.style.height = hs + "px";
     el.style.setProperty("--s", Math.min(ws, hs) + "px");
@@ -941,6 +945,7 @@ export class MapView {
 
   apply() {
     this.world.style.transform = `translate(${this.view.x}px,${this.view.y}px) scale(${this.view.k})`;
+    this.root.style.setProperty("--inv", String(1 / this.view.k));   // so the resize handles keep one size on screen at any zoom
     if (this.shapeMode && this.view.k !== this._shapeK) this.renderShapes();
   }
 
@@ -1001,6 +1006,8 @@ export class MapView {
         return;
       }
     }
+    const hd = this.interactive && !this.paintMode && !this.moveGrid && !this.shapeMode && !this.perspMode ? e.target.closest?.("[data-handle]") : null;
+    if (hd && this.pointers.size === 0 && !this.drag && !this.rs) { this.startResize(hd, e); return; }
     if (this.moveGrid && this.interactive && this.pointers.size === 0 && !this.gpan) {
       this.gpan = { pid: e.pointerId, x: e.clientX, y: e.clientY };
       this.root.setPointerCapture(e.pointerId);
@@ -1036,7 +1043,55 @@ export class MapView {
     if (this.pointers.size === 2) this.startPinch();
   }
 
+  /* ----- resizing a token by its handles ----- */
+  startResize(hd, e) {
+    const el = hd.closest(".tok");
+    const ent = this.ents.find((x) => x.id === el?.dataset.id);
+    if (!ent || !el.classList.contains("sel")) return;   // only the selected token shows its handles
+    const obj = ent.type === "object";
+    const w0 = obj ? clamp(Number(ent.w) || 1, OBJECT_MIN, OBJECT_MAX) : clamp(Number(ent.size) || 1, PERSON_MIN, PERSON_MAX);
+    const h0 = obj ? clamp(Number(ent.h) || 1, OBJECT_MIN, OBJECT_MAX) : w0;
+    this.rs = { pid: e.pointerId, id: ent.id, el, handle: hd.dataset.handle, obj, base: this.cellSizeAt(ent.x, ent.y), w0, h0,
+      rot: obj ? ((Number(ent.rot) || 0) * Math.PI) / 180 : 0, sx: e.clientX, sy: e.clientY, x0: ent.x, y0: ent.y, w: w0, h: h0, x: ent.x, y: ent.y, moved: false };
+    this.root.setPointerCapture(e.pointerId);
+    el.classList.add("resizing");
+  }
+
+  /* The corner scales the whole token; the edges stretch just the width or the height (objects). The opposite side stays put,
+     like resizing a window. Sizes snap to quarter squares when "Snap tokens" is on, otherwise to hundredths. */
+  doResize(e) {
+    const rs = this.rs, ent = this.ents.find((x) => x.id === rs.id);
+    if (!ent) return;
+    const k = this.view.k, dx = (e.clientX - rs.sx) / k, dy = (e.clientY - rs.sy) / k;
+    const cs = Math.cos(rs.rot), sn = Math.sin(rs.rot);
+    const lx = (dx * cs + dy * sn) / rs.base, ly = (-dx * sn + dy * cs) / rs.base;   // movement along the token's own width and height, in squares
+    let w = rs.w0, h = rs.h0, prop = null;
+    if (rs.handle === "e") w = rs.w0 + lx;
+    else if (rs.handle === "s") h = rs.h0 + ly;
+    else if (rs.obj && e.shiftKey) { w = rs.w0 + lx; h = rs.h0 + ly; }   // Shift on the corner: stretch freely
+    else { prop = ((rs.w0 + lx) / rs.w0 + (rs.h0 + ly) / rs.h0) / 2; w = rs.w0 * prop; h = rs.h0 * prop; }
+    const step = this.grid.snap ? 0.25 : 0.05, snap = (v) => Math.round(v / step) * step, r2 = (v) => Math.round(v * 100) / 100;
+    const lo = rs.obj ? OBJECT_MIN : PERSON_MIN, hi = rs.obj ? OBJECT_MAX : PERSON_MAX;
+    w = clamp(snap(w), lo, hi);
+    // Scaling the whole token keeps its exact shape (unless it's snapping to quarter squares); a side is only snapped when it moves alone.
+    h = !rs.obj ? w : prop !== null && !this.grid.snap ? clamp(rs.h0 * (w / rs.w0), lo, hi) : clamp(snap(h), lo, hi);
+    w = r2(w); h = r2(h);
+    const dw = ((w - rs.w0) * rs.base) / 2, dh = ((h - rs.h0) * rs.base) / 2;   // the middle moves half as far, along the token's own axes
+    rs.x = rs.x0 + (dw * cs - dh * sn) / this.dim.w;
+    rs.y = rs.y0 + (dw * sn + dh * cs) / this.dim.h;
+    rs.w = w; rs.h = h; rs.moved = true;
+    const live = { ...ent, w, h, size: w, x: rs.x, y: rs.y };
+    const { ws, hs } = this.sizeToken(rs.el, live, rs.x, rs.y);
+    rs.el.style.left = rs.x * this.dim.w - ws / 2 + "px";
+    rs.el.style.top = rs.y * this.dim.h - hs / 2 + "px";
+    const fmt = (v) => String(Math.round(v * 100) / 100);
+    const tag = rs.el.querySelector(".tok-dim");
+    if (tag) tag.textContent = rs.obj ? `${fmt(w)} × ${fmt(h)}` : `${fmt(w)}`;
+  }
+
   move(e) {
+    const rs = this.rs;
+    if (rs && e.pointerId === rs.pid) { this.doResize(e); return; }
     const vd = this.vdrag;
     if (vd && e.pointerId === vd.pid) {
       const p = this.toNorm(e.clientX, e.clientY, false, vd.a === "q");
@@ -1119,6 +1174,14 @@ export class MapView {
       return;
     }
     if (this.rdrag && e.pointerId === this.rdrag.pid) { this.rdrag = null; return; }
+    if (this.rs && e.pointerId === this.rs.pid) {
+      const rs = this.rs;
+      this.rs = null;
+      rs.el.classList.remove("resizing");
+      if (rs.moved) this.cb.onResize?.(rs.id, { w: rs.w, h: rs.h, x: rs.x, y: rs.y, obj: rs.obj });
+      this.render();
+      return;
+    }
     const d = this.drag;
     if (d && e.pointerId === d.pid) {
       this.drag = null;

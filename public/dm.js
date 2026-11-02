@@ -1,4 +1,4 @@
-import { call, uid, esc, clamp, TYPES, OBJECT_ICONS, OBJECT_SHAPES, OBJECT_TINTS, OBJECT_PRESETS, STRUCT_SHAPES, MapView, pingColor, PING_TTL, defaultPersp, FT_PER_SQUARE, turnKey, MIN_SQUARE, autoLineWidth } from "./common.js";
+import { call, uid, esc, clamp, TYPES, OBJECT_ICONS, OBJECT_SHAPES, OBJECT_TINTS, OBJECT_PRESETS, STRUCT_SHAPES, MapView, pingColor, PING_TTL, defaultPersp, FT_PER_SQUARE, turnKey, MIN_SQUARE, autoLineWidth, OBJECT_MIN, OBJECT_MAX, PERSON_MIN, PERSON_MAX } from "./common.js";
 import { mountRoller } from "./dice.js";
 import { SheetStore, mountBook, mountNotes, blankSheet } from "./sheet.js";
 import { Library, parseSpells } from "./library.js";
@@ -42,6 +42,13 @@ const mv = new MapView($("#stage"), {
     bump(); scheduleSave(300);
   },
   onSelect(id) { select(id); },
+  onResize(id, p) {   // dragged a handle on the selected token
+    const e = ent(id);
+    if (!e) return;
+    if (e.type === "object") { e.w = p.w; e.h = p.h; } else e.size = p.w;
+    e.x = p.x; e.y = p.y;
+    changed();
+  },
   onEdit(id) { editToken(id); },
   onFogStroke() { scheduleFogUpload(); },
   onGridMove() { gridChanged(); },
@@ -519,8 +526,10 @@ function editToken(id) {
       <div class="field"><label for="f_name">Name</label><input id="f_name" name="name" type="text" value="${esc(e.name)}" maxlength="40" required></div>
       <div class="field"><label for="f_type">Type</label><select id="f_type" name="type">
         ${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${e.type === k ? "selected" : ""}>${v.label}</option>`).join("")}</select></div>
-      <div class="field" data-grp="people"><label for="f_size">Size</label><select id="f_size" name="size">
-        ${sizes.map(([v, l]) => `<option value="${v}" ${(e.size || 1) === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+      <div class="field" data-grp="people"><label for="f_size">Size (in squares)</label>
+        <input id="f_size" name="size" type="number" min="${PERSON_MIN}" max="${PERSON_MAX}" step="any" list="sizeList" value="${e.size || 1}">
+        <datalist id="sizeList">${sizes.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</datalist>
+        <small class="hint">Any size you like. 1 is Medium, 2 Large, 3 Huge. You can also drag the corner handle on the map.</small></div>
       <div data-grp="object">
         <div class="row">
           <div class="field"><label for="f_shape">Shape</label><select id="f_shape" name="shape">
@@ -532,9 +541,15 @@ function editToken(id) {
           <option value="" ${(e.icon ?? "📦") === "" ? "selected" : ""}>None</option>
           ${OBJECT_ICONS.map(([icon, label]) => `<option value="${icon}" ${(e.icon ?? "📦") === icon ? "selected" : ""}>${icon}  ${esc(label)}</option>`).join("")}</select></div>
         <div class="row">
-          <div class="field"><label for="f_w">Width (squares)</label><input id="f_w" name="w" type="number" min="0.25" max="12" step="0.25" value="${e.w || 1}"></div>
-          <div class="field"><label for="f_h">Height (squares)</label><input id="f_h" name="h" type="number" min="0.25" max="12" step="0.25" value="${e.h || 1}"></div>
+          <div class="field"><label for="f_w">Width (squares)</label><input id="f_w" name="w" type="number" min="${OBJECT_MIN}" max="${OBJECT_MAX}" step="any" value="${e.w || 1}"></div>
+          <div class="field"><label for="f_h">Height (squares)</label><input id="f_h" name="h" type="number" min="${OBJECT_MIN}" max="${OBJECT_MAX}" step="any" value="${e.h || 1}"></div>
         </div>
+        <div class="row" style="align-items:center;gap:.4rem .8rem;margin-bottom:.6rem">
+          <button type="button" class="btn small" data-scale="0.5">Half the size</button>
+          <button type="button" class="btn small" data-scale="2">Double</button>
+          <label class="check"><input type="checkbox" id="f_keep"> Keep proportions</label>
+        </div>
+        <p class="hint" style="margin:-.2rem 0 .6rem">Any size works, such as 0.35 or 6. You can also select the token on the map and drag its handles.</p>
         <div class="row" style="align-items:flex-end">
           <div class="field"><label for="f_rot">Turn (degrees)</label><input id="f_rot" name="rot" type="number" min="0" max="359" step="15" value="${Math.round(e.rot || 0) % 360}"></div>
           <button type="button" class="btn small" data-turn style="margin-bottom:.75rem">Turn 90°</button>
@@ -562,14 +577,14 @@ function editToken(id) {
       const wasPc = e.type === "pc";
       e.name = d.name.trim() || e.name;
       e.type = d.type;
-      e.size = Number(d.size) || e.size || 1;
+      e.size = clamp(Number(d.size) || e.size || 1, PERSON_MIN, PERSON_MAX);
       if (e.type === "object") {
         e.icon = d.icon ?? "";
         e.shape = d.shape || "box";
         e.tint = d.tint || "";
         e.labelIn = d.labelIn === "on";
-        e.w = clamp(Number(d.w) || 1, 0.25, 12);
-        e.h = clamp(Number(d.h) || 1, 0.25, 12);
+        e.w = clamp(Number(d.w) || 1, OBJECT_MIN, OBJECT_MAX);
+        e.h = clamp(Number(d.h) || 1, OBJECT_MIN, OBJECT_MAX);
         e.rot = (((Math.round(Number(d.rot)) || 0) % 360) + 360) % 360;
         e.noLabel = d.noLabel === "on";
       }
@@ -597,6 +612,18 @@ function editToken(id) {
       };
       root.querySelector("#f_type").addEventListener("change", sync);
       sync();
+      // Half / Double, and "keep proportions" while typing a width or a height
+      const fw = root.querySelector("#f_w"), fh = root.querySelector("#f_h"), keep = root.querySelector("#f_keep");
+      const round2 = (v) => String(Math.round(clamp(v, OBJECT_MIN, OBJECT_MAX) * 100) / 100);
+      root.querySelectorAll("[data-scale]").forEach((b) => b.addEventListener("click", () => {
+        const f = Number(b.dataset.scale);
+        fw.value = round2((Number(fw.value) || 1) * f);
+        fh.value = round2((Number(fh.value) || 1) * f);
+      }));
+      let ratio = 1;
+      keep.addEventListener("change", () => { ratio = (Number(fh.value) || 1) / (Number(fw.value) || 1); });
+      fw.addEventListener("input", () => { if (keep.checked && Number(fw.value) > 0) fh.value = round2(Number(fw.value) * ratio); });
+      fh.addEventListener("input", () => { if (keep.checked && Number(fh.value) > 0) fw.value = round2(Number(fh.value) / ratio); });
       root.querySelector("[data-turn]").addEventListener("click", () => {
         const r = root.querySelector("#f_rot");
         r.value = (((Math.round(Number(r.value)) || 0) + 90) % 360);
