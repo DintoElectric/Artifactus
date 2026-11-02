@@ -48,8 +48,8 @@ export const OBJECT_PRESETS = [
     ["Pond", "", "round", 4, 3, "#5b9fd6"],
   ]],
   ["Treasure and items", [
-    ["Treasure", "💰", "round", 1, 1, ""], ["Key", "🗝️", "round", 0.5, 0.5, ""], ["Scroll", "📜", "box", 0.5, 0.5, ""],
-    ["Potion", "⚗️", "round", 0.5, 0.5, ""], ["Marker", "⭐", "round", 1, 1, ""], ["Mystery", "❓", "box", 1, 1, ""],
+    ["Treasure", "💰", "round", 1, 1, ""], ["Key", "🗝️", "round", 1, 1, ""], ["Scroll", "📜", "box", 1, 1, ""],
+    ["Potion", "⚗️", "round", 1, 1, ""], ["Marker", "⭐", "round", 1, 1, ""], ["Mystery", "❓", "box", 1, 1, ""],
   ]],
 ];
 
@@ -393,7 +393,7 @@ export class MapView {
       }
       const obj = e.type === "object";
       const struct = obj && STRUCT_SHAPES.has(e.shape);
-      el.classList.toggle("obj", obj);
+      el.classList.toggle("otok", obj);   // (not "obj": the Objectives cards already use that name for their own styling)
       el.classList.toggle("struct", struct);
       el.classList.toggle("round", obj && e.shape === "round");
       el.classList.toggle("inside", obj && (e.labelIn ?? struct));
@@ -552,16 +552,42 @@ export class MapView {
     return { c, r };
   }
 
-  /* The middle of a grid square, as a spot on the map (0 to 1), or null if it can't be placed. */
-  cellCenter(c, r) {
+  /* A spot on the map (0 to 1) for a position counted in grid squares, fractions included, or null if it can't be placed. */
+  cellPoint(u, v) {
     if (!this.dim.w) return null;
     const P = this.persp();
     if (P) {
-      const pt = this.gridPt(P, c + 0.5, r + 0.5);
+      const pt = this.gridPt(P, u, v);
       return pt ? { x: pt[0] / this.dim.w, y: pt[1] / this.dim.h } : null;
     }
     const g = Math.max(MIN_SQUARE, this.grid.size || 60), ox = this.grid.ox || 0, oy = this.grid.oy || 0;
-    return { x: ((c + 0.5) * g + ox) / this.dim.w, y: ((r + 0.5) * g + oy) / this.dim.h };
+    return { x: (u * g + ox) / this.dim.w, y: (v * g + oy) / this.dim.h };
+  }
+
+  /* The middle of a grid square, as a spot on the map (0 to 1), or null if it can't be placed. */
+  cellCenter(c, r) { return this.cellPoint(c + 0.5, r + 0.5); }
+
+  /* How many grid squares wide and tall a token covers, turned into account when it's turned a quarter turn. */
+  tokenSquares(ent) {
+    const obj = ent.type === "object";
+    let w = obj ? clamp(Number(ent.w) || 1, OBJECT_MIN, OBJECT_MAX) : clamp(Number(ent.size) || 1, PERSON_MIN, PERSON_MAX);
+    let h = obj ? clamp(Number(ent.h) || 1, OBJECT_MIN, OBJECT_MAX) : w;
+    const rot = obj ? (((Math.round(Number(ent.rot)) || 0) % 360) + 360) % 360 : 0;
+    if (rot % 180 === 90) [w, h] = [h, w];
+    return { w, h, square: rot % 90 === 0 };   // square: lines up with the grid (not turned at an angle)
+  }
+
+  /* Where a token lands when dropped with Snap tokens on. Its EDGES line up with the grid, not just its middle: a 1x1 item fills
+     one square, a 2-wide shelf sits between grid lines, a half-square item fits in half a square. */
+  snapToken(p, ent) {
+    if (!(this.grid.snap && this.grid.on) || !this.dim.w) return p;
+    const uv = this.cellUV(p.x, p.y);
+    const t = this.tokenSquares(ent);
+    if (!uv || !t.square) return this.snapPoint(p.x, p.y);   // turned at an angle: just use the middle of the square
+    const stepU = t.w >= 1 ? 1 : 0.5, stepV = t.h >= 1 ? 1 : 0.5;
+    const left = Math.round((uv[0] - t.w / 2) / stepU) * stepU, top = Math.round((uv[1] - t.h / 2) / stepV) * stepV;
+    const q = this.cellPoint(left + t.w / 2, top + t.h / 2);
+    return q ? { x: clamp(q.x, 0, 1), y: clamp(q.y, 0, 1) } : p;
   }
 
   /* Why a character can't stand in this square, or null if they can: "edge" (past a perspective grid), "off" (off the map),
@@ -1058,7 +1084,8 @@ export class MapView {
   }
 
   /* The corner scales the whole token; the edges stretch just the width or the height (objects). The opposite side stays put,
-     like resizing a window. Sizes snap to quarter squares when "Snap tokens" is on, otherwise to hundredths. */
+     like resizing a window. Sizes follow the grid: quarter squares, pulled toward whole squares so "exactly one square" is easy
+     to hit. Hold Alt (Option) to size it freely instead. */
   doResize(e) {
     const rs = this.rs, ent = this.ents.find((x) => x.id === rs.id);
     if (!ent) return;
@@ -1070,11 +1097,16 @@ export class MapView {
     else if (rs.handle === "s") h = rs.h0 + ly;
     else if (rs.obj && e.shiftKey) { w = rs.w0 + lx; h = rs.h0 + ly; }   // Shift on the corner: stretch freely
     else { prop = ((rs.w0 + lx) / rs.w0 + (rs.h0 + ly) / rs.h0) / 2; w = rs.w0 * prop; h = rs.h0 * prop; }
-    const step = this.grid.snap ? 0.25 : 0.05, snap = (v) => Math.round(v / step) * step, r2 = (v) => Math.round(v * 100) / 100;
+    const free = e.altKey, step = free ? 0.05 : 0.25, r2 = (v) => Math.round(v * 100) / 100;
+    const snap = (v) => {
+      let r = Math.round(v / step) * step;
+      if (!free) { const whole = Math.round(v); if (whole >= 1 && Math.abs(v - whole) <= 0.12) r = whole; }
+      return r;
+    };
     const lo = rs.obj ? OBJECT_MIN : PERSON_MIN, hi = rs.obj ? OBJECT_MAX : PERSON_MAX;
     w = clamp(snap(w), lo, hi);
-    // Scaling the whole token keeps its exact shape (unless it's snapping to quarter squares); a side is only snapped when it moves alone.
-    h = !rs.obj ? w : prop !== null && !this.grid.snap ? clamp(rs.h0 * (w / rs.w0), lo, hi) : clamp(snap(h), lo, hi);
+    // Freely scaling the whole token (Alt) keeps its exact shape; otherwise each side lands on the grid.
+    h = !rs.obj ? w : prop !== null && free ? clamp(rs.h0 * (w / rs.w0), lo, hi) : clamp(snap(h), lo, hi);
     w = r2(w); h = r2(h);
     const dw = ((w - rs.w0) * rs.base) / 2, dh = ((h - rs.h0) * rs.base) / 2;   // the middle moves half as far, along the token's own axes
     rs.x = rs.x0 + (dw * cs - dh * sn) / this.dim.w;
@@ -1130,9 +1162,10 @@ export class MapView {
     if (d && e.pointerId === d.pid) {
       if (!d.moved && Math.hypot(e.clientX - d.sx, e.clientY - d.sy) < 5) return;
       d.moved = true;
-      const p = this.toNorm(e.clientX, e.clientY, true);
-      d.x = p.x; d.y = p.y;
       const ent = this.ents.find((x) => x.id === d.id);
+      const raw = this.toNorm(e.clientX, e.clientY, false);
+      const p = ent ? this.snapToken(raw, ent) : raw;
+      d.x = p.x; d.y = p.y;
       if (ent && this.persp()) this.sizeToken(d.el, ent, p.x, p.y);   // tokens shrink toward the horizon as they're dragged
       d.el.style.left = p.x * this.dim.w - parseFloat(d.el.style.width) / 2 + "px";
       d.el.style.top = p.y * this.dim.h - parseFloat(d.el.style.height) / 2 + "px";

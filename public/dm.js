@@ -545,11 +545,12 @@ function editToken(id) {
           <div class="field"><label for="f_h">Height (squares)</label><input id="f_h" name="h" type="number" min="${OBJECT_MIN}" max="${OBJECT_MAX}" step="any" value="${e.h || 1}"></div>
         </div>
         <div class="row" style="align-items:center;gap:.4rem .8rem;margin-bottom:.6rem">
+          <button type="button" class="btn small" data-setsize="1">One square</button>
           <button type="button" class="btn small" data-scale="0.5">Half the size</button>
           <button type="button" class="btn small" data-scale="2">Double</button>
           <label class="check"><input type="checkbox" id="f_keep"> Keep proportions</label>
         </div>
-        <p class="hint" style="margin:-.2rem 0 .6rem">Any size works, such as 0.35 or 6. You can also select the token on the map and drag its handles.</p>
+        <p class="hint" style="margin:-.2rem 0 .6rem">Any size works, such as 0.35 or 6. You can also select the token on the map and drag its handles (they land on grid squares; hold Alt to size freely).</p>
         <div class="row" style="align-items:flex-end">
           <div class="field"><label for="f_rot">Turn (degrees)</label><input id="f_rot" name="rot" type="number" min="0" max="359" step="15" value="${Math.round(e.rot || 0) % 360}"></div>
           <button type="button" class="btn small" data-turn style="margin-bottom:.75rem">Turn 90°</button>
@@ -615,6 +616,7 @@ function editToken(id) {
       // Half / Double, and "keep proportions" while typing a width or a height
       const fw = root.querySelector("#f_w"), fh = root.querySelector("#f_h"), keep = root.querySelector("#f_keep");
       const round2 = (v) => String(Math.round(clamp(v, OBJECT_MIN, OBJECT_MAX) * 100) / 100);
+      root.querySelector("[data-setsize]").addEventListener("click", () => { fw.value = fh.value = "1"; });   // a potion, a key, a scroll: one square
       root.querySelectorAll("[data-scale]").forEach((b) => b.addEventListener("click", () => {
         const f = Number(b.dataset.scale);
         fw.value = round2((Number(fw.value) || 1) * f);

@@ -498,12 +498,12 @@ dialog h2{margin-bottom:1rem}
 
 /* ---------- object tokens (chests, doors, traps...) ---------- */
 .tok-name{font-size:calc(var(--ls,var(--s))*.27)}
-.tok.obj{border-radius:18%}
-.tok.obj .tok-img{border-radius:18%}
-.tok.obj .tok-face{font-size:calc(var(--s)*.56);transform:rotate(calc(var(--rot,0deg)*-1));color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.45);
+.tok.otok{border-radius:18%}
+.tok.otok .tok-img{border-radius:18%}
+.tok.otok .tok-face{font-size:calc(var(--s)*.56);transform:rotate(calc(var(--rot,0deg)*-1));color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.45);
   font-family:"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",system-ui,sans-serif}
-.tok.obj .tok-name{top:50%;left:50%;margin-top:0;transform-origin:0 0;transform:rotate(calc(var(--rot,0deg)*-1)) translate(-50%,var(--ly,60%))}
-.tok.obj.turn::after{border-radius:26%}
+.tok.otok .tok-name{top:50%;left:50%;margin-top:0;transform-origin:0 0;transform:rotate(calc(var(--rot,0deg)*-1)) translate(-50%,var(--ly,60%))}
+.tok.otok.turn::after{border-radius:26%}
 .tok.nolabel .tok-name{display:none}
 .oicon{width:1rem;text-align:center;font-size:1rem;flex:none;font-family:"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",system-ui,sans-serif}
 .trow{flex-wrap:wrap}
@@ -514,10 +514,10 @@ dialog h2{margin-bottom:1rem}
 .tok.struct{background:none;box-shadow:none;border-radius:0}
 .tok-shape .body{fill:color-mix(in srgb,var(--c) 42%,transparent);stroke:color-mix(in srgb,var(--c) 78%,#fff)}
 .tok-shape .det{fill:none;stroke:color-mix(in srgb,var(--c) 55%,#000)}
-.tok.obj.round,.tok.obj.round .tok-img{border-radius:50%}
+.tok.otok.round,.tok.otok.round .tok-img{border-radius:50%}
 .tok.struct .tok-img{border-radius:0}
 .tok.struct.turn::after{border-radius:6%}
-.tok.obj.inside .tok-name{transform:rotate(calc(var(--rot,0deg)*-1)) translate(-50%,-50%)}
+.tok.otok.inside .tok-name{transform:rotate(calc(var(--rot,0deg)*-1)) translate(-50%,-50%)}
 
 /* ---------- video maps ---------- */
 .mv-vid{background:#000}
@@ -651,7 +651,7 @@ html.popwin,html.popwin body{height:100%;margin:0}
 .tok-handle.h-se{right:calc(-11px * var(--inv,1));bottom:calc(-11px * var(--inv,1))}
 .tok-handle.h-e{right:calc(-11px * var(--inv,1));top:50%;transform:translateY(-50%);cursor:ew-resize}
 .tok-handle.h-s{bottom:calc(-11px * var(--inv,1));left:50%;transform:translateX(-50%);cursor:ns-resize}
-.tok:not(.obj) .tok-handle.h-e,.tok:not(.obj) .tok-handle.h-s{display:none}
+.tok:not(.otok) .tok-handle.h-e,.tok:not(.otok) .tok-handle.h-s{display:none}
 .tok-dim{display:none;position:absolute;left:50%;bottom:calc(100% + 12px * var(--inv,1));z-index:8;pointer-events:none;white-space:nowrap;
   transform:translateX(-50%) rotate(calc(var(--rot,0deg) * -1));font-size:calc(15px * var(--inv,1));font-weight:700;color:#fff;
   background:rgba(10,13,20,.94);border:1px solid var(--brass);border-radius:.45em;padding:.1em .55em}
