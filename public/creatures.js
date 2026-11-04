@@ -28,7 +28,7 @@ export function crValue(cr) {
 }
 
 /* A stat block laid out for reading at the table. */
-export function cardHTML(c) {
+export function cardHTML(c, { title = true } = {}) {
   const line = (label, v) => (String(v ?? "").trim() ? `<p class="sc-line"><b>${label}</b> ${esc(String(v))}</p>` : "");
   const block = (label, text) => (String(text ?? "").trim() ? `<h3 class="sc-h">${label}</h3><div class="sc-text">${esc(text)}</div>` : "");
   const npc = c.type === "npc";
@@ -36,7 +36,7 @@ export function cardHTML(c) {
   const story = npc && [c.wants, c.secret, c.voice].some((x) => String(x).trim())
     ? `<hr>${block("Wants", c.wants)}${block("Secret", c.secret)}${block("Voice and manner", c.voice)}` : "";
   return `<article class="statcard ${npc ? "npc" : "enemy"}">
-    <h2>${esc(c.name || "Unnamed")}</h2>
+    ${title ? `<h2>${esc(c.name || "Unnamed")}</h2>` : ""}
     ${sub ? `<p class="sc-sub">${esc(sub)}</p>` : ""}
     <hr>
     ${line("Armor Class", c.ac)}${line("Hit Points", c.hp ? `${c.hp}${String(c.hpNote).trim() ? ` (${c.hpNote})` : ""}` : "")}${line("Speed", c.speed)}

@@ -656,3 +656,41 @@ html.popwin,html.popwin body{height:100%;margin:0}
   transform:translateX(-50%) rotate(calc(var(--rot,0deg) * -1));font-size:calc(15px * var(--inv,1));font-weight:700;color:#fff;
   background:rgba(10,13,20,.94);border:1px solid var(--brass);border-radius:.45em;padding:.1em .55em}
 .tok.resizing .tok-dim{display:block}
+
+/* ---------- the combat window: initiative and stat blocks ---------- */
+.poproot>.combatwin{flex:1;min-height:0}
+.combatwin{display:grid;grid-template-columns:minmax(300px,380px) minmax(0,1fr);gap:.9rem;padding:.8rem;box-sizing:border-box;height:100%;min-height:0}
+.combatwin>#initCard{margin:0;overflow:auto;min-height:0}
+.combatstats{min-width:0;min-height:0;display:flex;flex-direction:column;gap:.5rem}
+.cs-head{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap}
+.cs-hint{color:var(--mute);font-size:.95rem}
+.cs-body{flex:1;min-height:0;overflow:auto;padding-right:.2rem}
+.cs-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:.8rem;align-items:start}
+.cs-card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:.65rem .8rem .8rem;display:grid;gap:.45rem;min-width:0}
+.cs-card.turn{border-color:var(--brass);box-shadow:0 0 0 1px var(--brass)}
+.cs-card.down{opacity:.6}
+.cs-top{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+.cs-name{font-family:var(--serif);font-size:1.35rem}
+.cs-name small{font-family:var(--sans);font-weight:400;color:var(--mute);font-size:.8rem}
+.cs-kind{font-size:.75rem;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--mute)}
+.cs-init{margin-left:auto;font-weight:700;color:var(--brass)}
+.cs-hp{display:flex;align-items:center;gap:.5rem .7rem;flex-wrap:wrap}
+.cs-hpnum{font-weight:700;min-width:6.2rem}
+.cs-bar{flex:1 1 6rem;min-width:5rem;height:.6rem;background:#0e121b;border-radius:999px;overflow:hidden}
+.cs-bar i{display:block;height:100%;background:var(--ok);transition:width .2s}
+.cs-hp.mid .cs-bar i{background:var(--brass)}
+.cs-hp.low .cs-bar i{background:var(--bad)}
+.cs-hpbtns{display:flex;gap:.25rem}
+.cs-hpbtns button{background:var(--panel2);border:1px solid var(--line);border-radius:7px;min-width:2.3rem;min-height:32px;padding:0 .5rem;font-weight:700}
+.cs-hpbtns button:hover{border-color:var(--brass)}
+.cs-card .statcard{border:0;background:transparent;padding:0;max-height:none;border-radius:0}
+.statcard.pc{border-top-color:var(--pc)}
+.cs-atk{margin:0;padding-left:1.1rem}
+.cs-pinned{background:var(--panel2);border:1px solid var(--brass);border-radius:10px;padding:.4rem .7rem;margin-bottom:.6rem;display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}
+.cs-note{margin:0 0 .6rem}
+.cs-link{display:flex;gap:.4rem;margin-top:.4rem}
+.cs-link select{flex:1;min-width:0}
+.cs-empty{text-align:center;padding:2.5rem 1rem}
+.irow.pinned{outline:2px solid var(--brass);outline-offset:-2px;border-radius:8px}
+.combatwin .irow{cursor:pointer}
+@media (max-width:900px){.combatwin{grid-template-columns:1fr;overflow:auto}}

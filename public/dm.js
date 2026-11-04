@@ -6,11 +6,18 @@ import { openPopout } from "./popout.js";
 import { mountChar } from "./charsheet.js";
 import { mountCampaign } from "./campaign-ui.js";
 import { mountCreatures } from "./creatures.js";
+import { mountCombatPanel } from "./combat.js";
 import { mountLocations } from "./locations.js";
 
-let popDoc = null;   // the map window's page, while the map is on another screen
-// Looks in this page first, then in the map window, so every control keeps working wherever it is.
-const $ = (s, r) => (r ? r.querySelector(s) : document.querySelector(s) || popDoc?.querySelector(s) || null);
+const popDocs = new Set();   // the pages of any pop-out windows (the map, the combat window) that are open
+// Looks in this page first, then in the pop-out windows, so every control keeps working wherever it is.
+const $ = (s, r) => {
+  if (r) return r.querySelector(s);
+  const here = document.querySelector(s);
+  if (here) return here;
+  for (const d of popDocs) { const f = d.querySelector(s); if (f) return f; }
+  return null;
+};
 const saved = JSON.parse(localStorage.getItem("dmTable") || "null");
 if (!saved) { location.replace("/"); throw new Error("No table"); }
 const { room, pin } = saved;
@@ -115,10 +122,10 @@ function toast(msg) {
   const t = $("#toast");
   t.textContent = msg; t.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.hidden = true; if (popDoc) { const p = popDoc.getElementById("popToast"); if (p) p.hidden = true; } }, 3500);
-  if (popDoc) {   // you may be looking at the map screen
-    let p = popDoc.getElementById("popToast");
-    if (!p) { p = popDoc.createElement("div"); p.id = "popToast"; p.className = "toast"; popDoc.body.appendChild(p); }
+  toastTimer = setTimeout(() => { t.hidden = true; for (const d of popDocs) { const p = d.getElementById("popToast"); if (p) p.hidden = true; } }, 3500);
+  for (const d of popDocs) {   // you may be looking at another screen
+    let p = d.getElementById("popToast");
+    if (!p) { p = d.createElement("div"); p.id = "popToast"; p.className = "toast"; d.body.appendChild(p); }
     p.textContent = msg; p.hidden = false;
   }
 }
@@ -126,7 +133,7 @@ function toast(msg) {
 /* ---------- dialogs ---------- */
 const dlg = $("#dlg");
 function openDlg(html, onSubmit, onMount) {
-  if (popCtl) window.focus();   // dialogs open on the main screen, so bring that window forward
+  if (popCtl || combatCtl) window.focus();   // dialogs open on the main screen, so bring that window forward
   dlg.innerHTML = html;
   const f = dlg.querySelector("form");
   f.addEventListener("submit", (e) => {
@@ -367,7 +374,7 @@ function setTab(t) {
 }
 
 /* ---------- the map on a second screen ---------- */
-let popCtl = null, popBusy = false;
+let popCtl = null, popBusy = false, mapPopDoc = null;
 const paneMap = document.getElementById("paneMap");
 const mapHolder = document.createElement("section");
 mapHolder.className = "pane";
@@ -387,7 +394,8 @@ async function popOutMap() {
     const ctl = await openPopout({ el: paneMap, name: `dmtable-map-${room}`, title: `Map · ${room}`, onClose: onPopClosed });
     if (!ctl) { toast("The map window didn't open. Allow pop-ups for this site, then try again."); return; }
     popCtl = ctl;
-    popDoc = ctl.doc;
+    mapPopDoc = ctl.doc;
+    popDocs.add(mapPopDoc);
     mv.watchSize(ctl.win);
     $("#popMap").textContent = "Show map window";
     setTab(tab);
@@ -398,7 +406,8 @@ async function popOutMap() {
 
 function onPopClosed() {
   popCtl = null;
-  popDoc = null;
+  popDocs.delete(mapPopDoc);
+  mapPopDoc = null;
   mv.watchSize(window);
   $("#popMap").textContent = "Map on 2nd screen";
   setTab(tab);
@@ -410,6 +419,119 @@ mapHolder.addEventListener("click", (e) => {
   const b = e.target.closest("[data-act]");
   if (b?.dataset.act === "show") popCtl?.focus();
   else if (b?.dataset.act === "back") popCtl?.close();
+});
+
+
+/* ---------- initiative and stat blocks on a second screen ---------- */
+let combatCtl = null, combatBusy = false, combatDoc = null, combatPanel = null, combatSeq = 0, combatTimer = null, combatLastTurn = null;
+let combatMode = localStorage.getItem("combatMode") === "all" ? "all" : "turn", pinnedId = "", pcSheets = new Map();
+const initCard = document.getElementById("initCard");
+const initHolder = document.createElement("section");
+initHolder.className = "card";
+initHolder.id = "initPlaceholder";
+initHolder.hidden = true;
+initHolder.innerHTML = `<div class="card-head"><h2>Initiative</h2></div>
+  <p class="hint" style="margin:0 0 .6rem">The initiative tracker and everyone's stat blocks are open in their own window. Everything works there as usual.</p>
+  <div class="btnrow"><button class="btn small primary" type="button" data-act="show">Show that window</button><button class="btn small" type="button" data-act="back">Bring it back here</button></div>`;
+initCard.after(initHolder);
+
+async function openCombat() {
+  if (combatCtl) { combatCtl.focus(); return; }
+  if (combatBusy) return;
+  combatBusy = true;
+  try {
+    const wrap = document.createElement("div");
+    wrap.className = "combatwin";
+    const statsEl = document.createElement("section");
+    statsEl.className = "combatstats";
+    initCard.before(wrap);
+    wrap.append(initCard, statsEl);   // the tracker and the stat blocks travel together
+    const ctl = await openPopout({ el: wrap, name: `dmtable-combat-${room}`, title: `Combat · ${room}`, width: 1400, height: 850, onClose: () => onCombatClosed(wrap, statsEl) });
+    if (!ctl) {
+      wrap.replaceWith(initCard);
+      statsEl.remove();
+      toast("The combat window didn't open. Allow pop-ups for this site, then try again.");
+      return;
+    }
+    combatCtl = ctl;
+    combatDoc = ctl.doc;
+    popDocs.add(combatDoc);
+    initHolder.hidden = false;
+    $("#popInit").hidden = true;   // (it's in the window now)
+    combatPanel = mountCombatPanel(statsEl, {
+      onMode(m) { combatMode = m === "all" ? "all" : "turn"; localStorage.setItem("combatMode", combatMode); renderCombat(); },
+      onUnpin() { pinnedId = ""; renderCombat(); },
+      onHp(id, delta) { applyHp(id, delta); },
+      onHpDialog(id) { hpDialog(id); },
+      onLink(id, cid) { const e = ent(id); if (e) { e.cid = cid; changed(); } },
+    });
+    loadPcSheets();
+    combatTimer = setInterval(loadPcSheets, 5000);
+    renderInit();
+    renderCombat();
+    toast("Combat is open in its own window. Drag it to your other screen.");
+  } finally { combatBusy = false; }
+}
+
+function onCombatClosed(wrap, statsEl) {
+  clearInterval(combatTimer);
+  popDocs.delete(combatDoc);
+  combatCtl = null; combatDoc = null; combatPanel = null; pinnedId = ""; combatLastTurn = null;
+  wrap.replaceWith(initCard);
+  statsEl.remove();
+  initHolder.hidden = true;
+  $("#popInit").hidden = false;
+  renderInit();
+}
+
+/* The players' character sheets, for their cards. */
+async function loadPcSheets() {
+  if (!combatCtl) return;
+  try {
+    const r = await call(`sheets/${room}`, { pin });
+    pcSheets = new Map(Object.entries(r.sheets || {}));
+    renderCombat();
+  } catch { /* try again on the next tick */ }
+}
+
+async function renderCombat() {
+  if (!combatCtl || !combatPanel) return;
+  const mine = ++combatSeq;
+  const library = await ensureCreatures().list();
+  if (mine !== combatSeq || !combatCtl || !combatPanel) return;
+  const turn = state.init.on ? state.init.turnId : null;
+  if (turn !== combatLastTurn) { pinnedId = ""; combatLastTurn = turn; }   // the turn moved on: go back to following it
+  combatPanel.render({ ents: state.ents, init: state.init, creatures: new Map(library.map((c) => [c.id, c])), library, sheets: pcSheets, mode: combatMode, pinnedId });
+  markPinned();
+}
+
+function markPinned() {
+  const list = $("#initList");
+  list?.querySelectorAll(".irow").forEach((r) => r.classList.toggle("pinned", !!combatCtl && r.dataset.id === pinnedId));
+}
+
+/* Click a name in the initiative list to see their card (click again to let it follow the turn). */
+function pinCombatant(id) {
+  if (!combatCtl) return;
+  pinnedId = pinnedId === id ? "" : id;
+  renderCombat().then(() => {
+    if (combatMode === "all" && pinnedId) combatDoc.querySelector(`.cs-card[data-id="${pinnedId}"]`)?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+  });
+}
+
+function applyHp(id, delta) {
+  const e = ent(id);
+  if (!e) return;
+  const base = e.hp ?? e.maxHp ?? 0;
+  e.hp = delta < 0 ? Math.max(0, base + delta) : e.maxHp != null ? Math.min(e.maxHp, base + delta) : base + delta;
+  changed();
+}
+
+$("#popInit").onclick = openCombat;
+initHolder.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-act]");
+  if (b?.dataset.act === "show") combatCtl?.focus();
+  else if (b?.dataset.act === "back") combatCtl?.close();
 });
 
 /* Campaign details and session log: loaded the first time the tab is opened. */
@@ -735,7 +857,7 @@ function renderInit() {
   const rows = I.list.map((it) => {
     const e = byId.get(it.id);
     if (!e) return "";
-    return `<li class="irow ${I.on && I.turnId === it.id ? "turn" : ""} ${e.down ? "down" : ""}" data-id="${e.id}">
+    return `<li class="irow ${I.on && I.turnId === it.id ? "turn" : ""} ${e.down ? "down" : ""} ${combatCtl && pinnedId === e.id ? "pinned" : ""}" data-id="${e.id}">
       <span class="dot" style="--c:${TYPES[e.type].color}"></span>
       <button class="iname" data-act="edit" title="Edit token">${esc(e.name)}${e.hidden ? " (hidden)" : ""}</button>
       <button class="ihp" data-act="hp" title="Damage or heal">${hpText(e)}</button>
@@ -749,6 +871,7 @@ function renderInit() {
 $("#initList").addEventListener("click", (e) => {
   const b = e.target.closest("[data-act]");
   const row = e.target.closest(".irow");
+  if (!b && row && combatCtl) { pinCombatant(row.dataset.id); return; }   // a click on the row itself shows that card
   if (!b || !row) return;
   const id = row.dataset.id;
   if (b.dataset.act === "edit") editToken(id);
@@ -858,7 +981,7 @@ $("#tokList").addEventListener("click", (ev) => {
   }
 });
 
-function renderSide() { renderInit(); renderTokens(); }
+function renderSide() { renderInit(); renderTokens(); renderCombat(); }
 
 /* ---------- inventory ---------- */
 const owners = () => [
